@@ -151,8 +151,15 @@
         <section class="list-panel">
           <div class="list-panel-header">
             <h2>Tasks and Deadlines</h2>
-            <div id="activeFiltersBadge" style="font-size: 0.75rem; color: var(--text-tertiary);">
-              Showing all entries
+            <div class="list-panel-header-actions" style="display: flex; align-items: center; gap: 0.75rem;">
+              <div id="activeFiltersBadge" style="font-size: 0.75rem; color: var(--text-tertiary);">
+                Showing all entries
+              </div>
+              <button id="toggleListPanelBtn" class="btn btn-icon" title="Collapse panel">
+                <svg id="toggleListPanelIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+              </button>
             </div>
           </div>
           <div class="list-scroll-area">
@@ -165,7 +172,7 @@
                   <th>Start Date</th>
                   <th>End / Exact Date</th>
                   <th>Duration (w)</th>
-                  <th>Assignee</th>
+                  <th>Assignee(s)</th>
                   <th style="width: 100px; text-align: right;">Actions</th>
                 </tr>
               </thead>
@@ -298,10 +305,13 @@
 
             <!-- Assignee with Autocomplete -->
             <div class="form-group">
-              <label for="taskAssigneeInput">Assignee Name</label>
-              <input type="text" id="taskAssigneeInput" placeholder="Enter name of person in charge">
+              <label for="taskAssigneeInput">Assignee Name(s)</label>
+              <input type="text" id="taskAssigneeInput" placeholder="Type name and press Enter to add">
               <div id="assigneeAutocomplete" class="autocomplete-dropdown">
                 <!-- Autocomplete suggestions -->
+              </div>
+              <div id="taskAssigneesContainer" class="assignee-pills-container">
+                <!-- Dynamically populated assignee pills -->
               </div>
             </div>
 
@@ -309,7 +319,7 @@
             <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
               <input type="checkbox" id="taskRecurrenceCheck" style="width: 1.2rem; height: 1.2rem; accent-color: var(--accent);">
               <label for="taskRecurrenceCheck" style="cursor: pointer; user-select: none;">
-                <strong>Repeat across all years</strong> (Weekly copy will be created for each year of the project)
+                <strong>Repeat across all years</strong> (Task will repeat on the same weeks for each year of the project)
               </label>
             </div>
           </div>
@@ -333,9 +343,9 @@
           <input type="hidden" id="deadlineIdField">
           <div class="modal-body">
             <div class="form-group">
-              <label for="deadlineTaskSelect">Related Task *</label>
-              <select id="deadlineTaskSelect" required>
-                <!-- Populated dynamically with tasks -->
+              <label for="deadlineProjectSelect">Related Project *</label>
+              <select id="deadlineProjectSelect" required>
+                <!-- Populated dynamically with projects -->
               </select>
             </div>
             
@@ -380,6 +390,24 @@
       </div>
     </div>
 
+    <!-- Linked Action Prompt Modal -->
+    <div id="linkedActionModal" class="modal-overlay">
+      <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-header">
+          <h3 id="linkedActionTitle">Linked Tasks Action</h3>
+          <button class="modal-close" onclick="closeModal('linkedActionModal')">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="linkedActionMessage">This task is linked to other tasks in a dependency chain. How would you like to proceed?</p>
+        </div>
+        <div class="modal-footer" style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+          <button type="button" class="btn" onclick="closeModal('linkedActionModal')">Cancel</button>
+          <button type="button" id="linkedActionSingleBtn" class="btn btn-primary">This Task Only</button>
+          <button type="button" id="linkedActionChainBtn" class="btn btn-primary">Entire Chain</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 5. Duplicate Project Modal -->
     <div id="duplicateProjectModal" class="modal-overlay">
       <div class="modal-content" style="max-width: 440px;">
@@ -399,7 +427,7 @@
           <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.5rem; margin-top: 0.5rem;" id="duplicateCopyDeadlinesContainer">
             <input type="checkbox" id="duplicateCopyDeadlines" checked style="width: 1.2rem; height: 1.2rem; accent-color: var(--accent); flex-shrink: 0;">
             <label for="duplicateCopyDeadlines" style="cursor: pointer; user-select: none;">
-              <strong>Copy Deadlines</strong> — Deadlines linked to copied tasks will also be duplicated
+              <strong>Copy Deadlines</strong> — Deadlines in this project will also be duplicated
             </label>
           </div>
         </div>

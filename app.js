@@ -23,7 +23,8 @@ let state = {
     zoomMonths: 12,
     viewportStartDate: '', // YYYY-MM-DD
     filterProjects: [],    // IDs of selected projects to show. Empty = all
-    filterAssignees: []    // Names of assignees to show. Empty = all
+    filterAssignees: [],   // Names of assignees to show. Empty = all
+    hideListPanel: false
   }
 };
 
@@ -175,6 +176,7 @@ function loadState() {
       if (!state.ui) state.ui = {};
       if (!state.ui.theme) state.ui.theme = 'dark';
       if (!state.ui.zoomMonths) state.ui.zoomMonths = 12;
+      if (state.ui.hideListPanel === undefined) state.ui.hideListPanel = false;
       
       // Migrate from viewportStartMonth to viewportStartDate
       if (state.ui.viewportStartMonth && !state.ui.viewportStartDate) {
@@ -190,7 +192,7 @@ function loadState() {
         let hasUnassigned = false;
         state.tasks.forEach(t => {
           if (t.assignee && t.assignee.trim()) {
-            assignees.add(t.assignee.trim());
+            t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => assignees.add(a));
           } else {
             hasUnassigned = true;
           }
@@ -199,6 +201,22 @@ function loadState() {
         if (hasUnassigned) state.ui.filterAssignees.push('Unassigned');
       }
       
+      // Migrate deadlines from task association to project association
+      if (state.deadlines) {
+        let stateChanged = false;
+        state.deadlines.forEach(d => {
+          if (d.taskId && !d.projectId) {
+            const task = state.tasks.find(t => t.id === d.taskId);
+            d.projectId = task ? (task.projectId || 'none') : 'none';
+            delete d.taskId;
+            stateChanged = true;
+          }
+        });
+        if (stateChanged) {
+          saveState();
+        }
+      }
+
       // Initialise undo snapshot from loaded data
       prevDataSnapshot = JSON.stringify({
         projects: state.projects,
@@ -404,13 +422,13 @@ function loadPlaceholderData() {
   state.deadlines = [
     {
       id: 'dead-irb-meet',
-      taskId: 'task-irb',
+      projectId: 'proj-sleep',
       name: 'IRB Review Meeting',
       date: `${currentYear}-10-15`
     },
     {
       id: 'dead-midterm',
-      taskId: 'task-dose',
+      projectId: 'proj-trial',
       name: 'Midterm Safety Review',
       date: `${currentYear}-11-20`
     }
@@ -420,6 +438,7 @@ function loadPlaceholderData() {
   state.ui.zoomMonths = 12;
   state.ui.filterProjects = ['none', 'proj-sleep', 'proj-trial'];
   state.ui.filterAssignees = ['Dr. Sarah Jenkins', 'Marcus Vance', 'Dr. Kenji Sato', 'Unassigned'];
+  state.ui.hideListPanel = false;
   
   saveState(true);
 }
@@ -447,6 +466,71 @@ function formatDateToString(date) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function getTaskIterationYears(task) {
+  if (!task.isIterated) {
+    return [parseLocalDate(task.startDate).getFullYear()];
+  }
+  
+  if (task.projectId && task.projectId !== 'none') {
+    const project = state.projects.find(p => p.id === task.projectId);
+    if (project && project.startMonth && project.endMonth) {
+      const startYear = parseLocalMonth(project.startMonth).year;
+      const endYear = parseLocalMonth(project.endMonth).year;
+      const years = [];
+      for (let y = startYear; y <= endYear; y++) {
+        years.push(y);
+      }
+      return years;
+    }
+  }
+  
+  // General Tasks (none)
+  if (state.projects.length > 0) {
+    let minYear = Infinity;
+    let maxYear = -Infinity;
+    state.projects.forEach(p => {
+      if (p.startMonth && p.endMonth) {
+        const sy = parseLocalMonth(p.startMonth).year;
+        const ey = parseLocalMonth(p.endMonth).year;
+        if (sy < minYear) minYear = sy;
+        if (ey > maxYear) maxYear = ey;
+      }
+    });
+    if (minYear !== Infinity) {
+      const years = [];
+      for (let y = minYear; y <= maxYear; y++) {
+        years.push(y);
+      }
+      return years;
+    }
+  }
+  
+  const cy = new Date().getFullYear();
+  return [cy, cy + 1, cy + 2];
+}
+
+function getTaskOccurrenceDates(task, year) {
+  const baseStart = parseLocalDate(task.startDate);
+  const baseYear = baseStart.getFullYear();
+  if (year === baseYear) {
+    return {
+      startDate: task.startDate,
+      endDate: task.endDate
+    };
+  }
+  
+  const baseWeek = getISOWeekNumber(baseStart);
+  const baseDayOfWeek = baseStart.getDay() || 7;
+  const targetMonday = getMondayOfISOWeek(year, baseWeek);
+  const targetStartDate = new Date(targetMonday.getTime() + (baseDayOfWeek - 1) * 86400000);
+  const targetEndDate = new Date(targetStartDate.getTime() + task.durationWeeks * 7 * 86400000);
+  
+  return {
+    startDate: formatDateToString(targetStartDate),
+    endDate: formatDateToString(targetEndDate)
+  };
 }
 
 // Get Monday of the week containing the date
@@ -497,6 +581,88 @@ function snapToNearestWeek(date) {
   return diffCurrent < diffNext ? monday : nextMonday;
 }
 
+// Helper: Get all task IDs in the connected component of a task's dependencies (undirected)
+function getLinkedTaskChain(taskId) {
+  const chain = new Set();
+  const queue = [taskId];
+  chain.add(taskId);
+  
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    
+    // 1. Predecessors of current
+    const task = state.tasks.find(t => t.id === currentId);
+    if (task && task.startType === 'dependency' && task.startAfterTaskId) {
+      const predId = task.startAfterTaskId;
+      if (!chain.has(predId)) {
+        chain.add(predId);
+        queue.push(predId);
+      }
+    }
+    
+    // 2. Successors of current
+    state.tasks.forEach(t => {
+      if (t.startType === 'dependency' && t.startAfterTaskId === currentId) {
+        if (!chain.has(t.id)) {
+          chain.add(t.id);
+          queue.push(t.id);
+        }
+      }
+    });
+  }
+  
+  return Array.from(chain);
+}
+
+// Helper: Sort tasks within a project such that connected task chains are placed on adjacent rows
+function sortTasksWithLinkedAdjacent(tasks) {
+  const visited = new Set();
+  const components = [];
+  
+  tasks.forEach(t => {
+    if (!visited.has(t.id)) {
+      const chain = getLinkedTaskChain(t.id);
+      // Filter the chain to only include tasks present in the current array
+      const projChain = chain.filter(id => tasks.some(x => x.id === id));
+      projChain.forEach(id => visited.add(id));
+      components.push(projChain);
+    }
+  });
+  
+  // Sort tasks within each component chronologically
+  components.forEach(comp => {
+    comp.sort((idA, idB) => {
+      const a = tasks.find(x => x.id === idA);
+      const b = tasks.find(x => x.id === idB);
+      if (!a || !b) return 0;
+      const startDiff = a.startDate.localeCompare(b.startDate);
+      if (startDiff !== 0) return startDiff;
+      return a.endDate.localeCompare(b.endDate);
+    });
+  });
+  
+  // Sort components relative to each other based on the earliest task in each component
+  components.sort((compA, compB) => {
+    const a = tasks.find(x => x.id === compA[0]);
+    const b = tasks.find(x => x.id === compB[0]);
+    if (!a || !b) return 0;
+    const startDiff = a.startDate.localeCompare(b.startDate);
+    if (startDiff !== 0) return startDiff;
+    return a.endDate.localeCompare(b.endDate);
+  });
+  
+  // Flatten back to array of tasks
+  const result = [];
+  components.forEach(comp => {
+    comp.forEach(id => {
+      const t = tasks.find(x => x.id === id);
+      if (t) result.push(t);
+    });
+  });
+  
+  return result;
+}
+
 // ==========================================
 // CASCADING SHIFTS & RECURRENCE MATH
 // ==========================================
@@ -510,6 +676,11 @@ function updateTaskDependencies(changedTaskId) {
   // Find all children tasks that start after this task
   const children = state.tasks.filter(t => t.startAfterTaskId === changedTaskId);
   for (const child of children) {
+    // If parent is iterated, child must be iterated also!
+    if (parentTask.isIterated && !child.isIterated) {
+      child.isIterated = true;
+    }
+    
     const prevStartStr = child.startDate;
     child.startDate = formatDateToString(parentEndDate);
     
@@ -772,17 +943,19 @@ function renderGanttChart(overrideWidth) {
       if (!state.ui.filterProjects.includes(pId)) return false;
     }
     
-    const assigneeName = (t.assignee || 'Unassigned').trim();
-    if (!state.ui.filterAssignees.includes(assigneeName)) return false;
+    const taskAssignees = t.assignee ? t.assignee.split(',').map(a => a.trim()).filter(Boolean) : [];
+    if (taskAssignees.length === 0) {
+      taskAssignees.push('Unassigned');
+    }
+    const hasMatch = taskAssignees.some(a => state.ui.filterAssignees.includes(a));
+    if (!hasMatch) return false;
     
     return true;
   });
 
   const filteredDeadlines = state.deadlines.filter(d => {
-    if (d.taskId && d.taskId !== 'none') {
-      return filteredTasks.some(t => t.id === d.taskId);
-    }
-    return false;
+    const pId = d.projectId || 'none';
+    return state.ui.filterProjects.includes(pId);
   });
 
   const tasksByProject = {};
@@ -793,6 +966,7 @@ function renderGanttChart(overrideWidth) {
   });
   
   // Sort tasks within each project: earliest start date first, then earliest end date first.
+  // Exception to the rule: Linked tasks must remain on adjacent rows.
   // During drag operations, preserve the cached order from drag initiation to prevent tasks from jumping swimlanes.
   Object.keys(tasksByProject).forEach(pId => {
     if (dragContext && dragContext.preDragOrder && dragContext.preDragOrder[pId]) {
@@ -804,16 +978,10 @@ function renderGanttChart(overrideWidth) {
         if (idxA !== -1) return -1;
         if (idxB !== -1) return 1;
         
-        const startDiff = a.startDate.localeCompare(b.startDate);
-        if (startDiff !== 0) return startDiff;
-        return a.endDate.localeCompare(b.endDate);
+        return 0;
       });
     } else {
-      tasksByProject[pId].sort((a, b) => {
-        const startDiff = a.startDate.localeCompare(b.startDate);
-        if (startDiff !== 0) return startDiff;
-        return a.endDate.localeCompare(b.endDate);
-      });
+      tasksByProject[pId] = sortTasksWithLinkedAdjacent(tasksByProject[pId]);
     }
   });
   
@@ -837,8 +1005,7 @@ function renderGanttChart(overrideWidth) {
   currentY += groupHeaderHeight;
 
   // Deadline row for General Tasks (if any)
-  const generalTaskIds = (tasksByProject['none'] || []).map(t => t.id);
-  const generalDeadlines = filteredDeadlines.filter(d => generalTaskIds.includes(d.taskId));
+  const generalDeadlines = filteredDeadlines.filter(d => (d.projectId || 'none') === 'none');
   if (generalDeadlines.length > 0) {
     const packing = packDeadlines(generalDeadlines, 13, dateToX);
     renderedRows.push({
@@ -846,7 +1013,6 @@ function renderGanttChart(overrideWidth) {
       type: 'deadline-row',
       projectId: 'none',
       deadlines: generalDeadlines,
-      taskLookup: tasksByProject['none'] || [],
       color: 'var(--text-tertiary)',
       lanes: packing.lanes,
       laneHeight: packing.laneHeight,
@@ -881,8 +1047,7 @@ function renderGanttChart(overrideWidth) {
     currentY += groupHeaderHeight;
 
     // Deadline row for this project (if any)
-    const projTaskIds = projTasks.map(t => t.id);
-    const projDeadlines = filteredDeadlines.filter(d => projTaskIds.includes(d.taskId));
+    const projDeadlines = filteredDeadlines.filter(d => d.projectId === p.id);
     if (projDeadlines.length > 0) {
       const packing = packDeadlines(projDeadlines, 13, dateToX);
       renderedRows.push({
@@ -890,7 +1055,6 @@ function renderGanttChart(overrideWidth) {
         type: 'deadline-row',
         projectId: p.id,
         deadlines: projDeadlines,
-        taskLookup: projTasks,
         color: pColor.value,
         lanes: packing.lanes,
         laneHeight: packing.laneHeight,
@@ -1037,45 +1201,58 @@ function renderGanttChart(overrideWidth) {
         const childRow = renderedRows.find(r => r.type === 'task' && r.data.id === task.id);
         
         if (parentRow && childRow) {
-          const parentX2 = dateToX(parent.endDate);
-          const parentY = parentRow.y + (rowHeight / 2) - 3;
+          const parentYears = getTaskIterationYears(parent);
+          const childYears = getTaskIterationYears(task);
+          const commonYears = parentYears.filter(y => childYears.includes(y));
           
-          const childX1 = dateToX(task.startDate);
-          const childY = childRow.y + (rowHeight / 2) - 3;
-          
-          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          
-          let dPath = '';
-          if (childX1 >= parentX2) {
-            const midX = parentX2 + (childX1 - parentX2) / 2;
-            dPath = `M ${parentX2} ${parentY} L ${midX} ${parentY} L ${midX} ${childY} L ${childX1} ${childY}`;
-          } else {
-            const hookX = parentX2 + 10;
-            const midY = parentY + (childY - parentY) / 2;
-            dPath = `M ${parentX2} ${parentY} L ${hookX} ${parentY} L ${hookX} ${midY} L ${childX1 - 10} ${midY} L ${childX1 - 10} ${childY} L ${childX1} ${childY}`;
-          }
-          
-          path.setAttribute('d', dPath);
-          path.setAttribute('class', 'dependency-line');
-          
-          path.addEventListener('mouseenter', (e) => {
-            showTooltip(e, `<strong>Dependency Link</strong><br>Task: "${task.name}" starts after "${parent.name}"`);
+          commonYears.forEach(year => {
+            const parentOcc = getTaskOccurrenceDates(parent, year);
+            const childOcc = getTaskOccurrenceDates(task, year);
+            
+            const parentX2 = dateToX(parentOcc.endDate);
+            const parentY = parentRow.y + (rowHeight / 2) - 3;
+            
+            const childX1 = dateToX(childOcc.startDate);
+            const childY = childRow.y + (rowHeight / 2) - 3;
+            
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            
+            let dPath = '';
+            if (childX1 >= parentX2) {
+              const midX = parentX2 + (childX1 - parentX2) / 2;
+              dPath = `M ${parentX2} ${parentY} L ${midX} ${parentY} L ${midX} ${childY} L ${childX1} ${childY}`;
+            } else {
+              const hookX = parentX2 + 10;
+              const midY = parentY + (childY - parentY) / 2;
+              dPath = `M ${parentX2} ${parentY} L ${hookX} ${parentY} L ${hookX} ${midY} L ${childX1 - 10} ${midY} L ${childX1 - 10} ${childY} L ${childX1} ${childY}`;
+            }
+            
+            path.setAttribute('d', dPath);
+            path.setAttribute('class', 'dependency-line');
+            path.style.stroke = parentRow.color;
+            
+            path.addEventListener('mouseenter', (e) => {
+              showTooltip(e, `<strong>Dependency Link</strong><br>Task: "${task.name}" starts after "${parent.name}" (${year})`);
+            });
+            path.addEventListener('mouseleave', hideTooltip);
+            
+            svg.appendChild(path);
+            
+            const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+            arrow.setAttribute('points', `${childX1},${childY} ${childX1-5},${childY-3} ${childX1-5},${childY+3}`);
+            arrow.setAttribute('class', 'dependency-arrow');
+            arrow.style.fill = parentRow.color;
+            arrow.style.stroke = parentRow.color;
+            svg.appendChild(arrow);
           });
-          path.addEventListener('mouseleave', hideTooltip);
-          
-          svg.appendChild(path);
-          
-          const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-          arrow.setAttribute('points', `${childX1},${childY} ${childX1-5},${childY-3} ${childX1-5},${childY+3}`);
-          arrow.setAttribute('class', 'dependency-arrow');
-          svg.appendChild(arrow);
         }
       }
     }
   });
 
   // 5. Shared Drag and Drop handler for tasks (Bar and Text grab)
-  function initiateDrag(e, task, dragMode) {
+  // 5. Shared Drag and Drop handler for tasks (Bar and Text grab)
+  function initiateDrag(e, task, dragMode, dragYear = null) {
     e.preventDefault();
     e.stopPropagation();
     
@@ -1088,8 +1265,12 @@ function renderGanttChart(overrideWidth) {
       } else {
         if (!state.ui.filterProjects.includes(pId)) return false;
       }
-      const assigneeName = (t.assignee || 'Unassigned').trim();
-      if (!state.ui.filterAssignees.includes(assigneeName)) return false;
+      const taskAssignees = t.assignee ? t.assignee.split(',').map(a => a.trim()).filter(Boolean) : [];
+      if (taskAssignees.length === 0) {
+        taskAssignees.push('Unassigned');
+      }
+      const hasMatch = taskAssignees.some(a => state.ui.filterAssignees.includes(a));
+      if (!hasMatch) return false;
       return true;
     });
     
@@ -1101,19 +1282,21 @@ function renderGanttChart(overrideWidth) {
     });
     
     Object.keys(tempTasksByProject).forEach(pId => {
-      tempTasksByProject[pId].sort((a, b) => {
-        const startDiff = a.startDate.localeCompare(b.startDate);
-        if (startDiff !== 0) return startDiff;
-        return a.endDate.localeCompare(b.endDate);
-      });
+      tempTasksByProject[pId] = sortTasksWithLinkedAdjacent(tempTasksByProject[pId]);
       preDragOrder[pId] = tempTasksByProject[pId].map(t => t.id);
     });
     
     const svgRect = svg.getBoundingClientRect();
     const mouseRelativeX = e.clientX - svgRect.left;
     const mouseRelativeY = e.clientY - svgRect.top;
-    const startX = dateToX(task.startDate);
-    const startX2 = dateToX(task.endDate);
+
+    const baseStart = parseLocalDate(task.startDate);
+    const baseYear = baseStart.getFullYear();
+    const effectiveYear = dragYear || baseYear;
+    const occ = getTaskOccurrenceDates(task, effectiveYear);
+    
+    const startX = dateToX(occ.startDate);
+    const startX2 = dateToX(occ.endDate);
 
     const row = renderedRows.find(r => r.type === 'task' && r.data.id === task.id);
     const originalRowY = row ? row.y : 0;
@@ -1125,6 +1308,9 @@ function renderGanttChart(overrideWidth) {
       startMouseY: e.clientY,
       startStartDateStr: task.startDate,
       startEndDateStr: task.endDate,
+      dragYear: effectiveYear,
+      startOccurrenceStartDateStr: occ.startDate,
+      startOccurrenceEndDateStr: occ.endDate,
       startProjectId: task.projectId || 'none',
       hoveredProjId: task.projectId || 'none',
       mouseRelativeX: mouseRelativeX,
@@ -1215,16 +1401,19 @@ function renderGanttChart(overrideWidth) {
       curTimelineEnd.setMonth(curTimelineEnd.getMonth() + curZoomMonths);
       const curTotalDurationMs = curTimelineEnd.getTime() - curTimelineStart.getTime();
       const curViewport = document.getElementById('chartViewport');
-      const curViewportWidth = curViewport ? (currentViewportWidth = curViewport.clientWidth || 1000) : 1000;
+      const curViewportWidth = curViewport ? (curViewport.clientWidth || 1000) : 1000;
 
       const targetTask = state.tasks.find(t => t.id === dragContext.taskId);
       if (targetTask) {
         if (dragContext.dragMode === 'move') {
           const targetX = relativeX - dragContext.mouseOffsetFromTaskStart;
           const targetDate = new Date(curTimelineStart.getTime() + (targetX / curViewportWidth) * curTotalDurationMs);
-          let newStart = snapToNearestDay(targetDate);
+          let newOccStart = snapToNearestDay(targetDate);
+          
+          const diffMs = newOccStart.getTime() - parseLocalDate(dragContext.startOccurrenceStartDateStr).getTime();
+          const newStart = new Date(parseLocalDate(dragContext.startStartDateStr).getTime() + diffMs);
           const durationWeeks = targetTask.durationWeeks || 4;
-          let newEnd = new Date(newStart.getTime() + durationWeeks * 7 * 86400000);
+          const newEnd = new Date(newStart.getTime() + durationWeeks * 7 * 86400000);
           
           targetTask.startDate = formatDateToString(newStart);
           targetTask.endDate = formatDateToString(newEnd);
@@ -1234,12 +1423,15 @@ function renderGanttChart(overrideWidth) {
         } else if (dragContext.dragMode === 'resize-start') {
           const targetX = relativeX - dragContext.mouseOffsetFromTaskStart;
           const targetDate = new Date(curTimelineStart.getTime() + (targetX / curViewportWidth) * curTotalDurationMs);
-          let newStart = snapToNearestDay(targetDate);
-          const endD = parseLocalDate(dragContext.startEndDateStr);
+          let newOccStart = snapToNearestDay(targetDate);
+          const occEnd = parseLocalDate(dragContext.startOccurrenceEndDateStr);
           
-          if (newStart < endD) {
+          if (newOccStart < occEnd) {
+            const diffMs = newOccStart.getTime() - parseLocalDate(dragContext.startOccurrenceStartDateStr).getTime();
+            const newStart = new Date(parseLocalDate(dragContext.startStartDateStr).getTime() + diffMs);
+            
             targetTask.startDate = formatDateToString(newStart);
-            targetTask.durationWeeks = Math.max(1, Math.round((endD - newStart) / (7 * 86400000)));
+            targetTask.durationWeeks = Math.max(1, Math.round((occEnd - newOccStart) / (7 * 86400000)));
             const newEnd = new Date(newStart.getTime() + targetTask.durationWeeks * 7 * 86400000);
             targetTask.endDate = formatDateToString(newEnd);
             targetTask.startType = 'date';
@@ -1249,12 +1441,12 @@ function renderGanttChart(overrideWidth) {
         } else if (dragContext.dragMode === 'resize-end') {
           const targetX = relativeX + dragContext.mouseOffsetFromTaskEnd;
           const targetDate = new Date(curTimelineStart.getTime() + (targetX / curViewportWidth) * curTotalDurationMs);
-          let newEnd = snapToNearestDay(targetDate);
-          const startD = parseLocalDate(dragContext.startStartDateStr);
+          let newOccEnd = snapToNearestDay(targetDate);
+          const occStart = parseLocalDate(dragContext.startOccurrenceStartDateStr);
           
-          if (newEnd > startD) {
-            targetTask.durationWeeks = Math.max(1, Math.round((newEnd - startD) / (7 * 86400000)));
-            const finalEnd = new Date(startD.getTime() + targetTask.durationWeeks * 7 * 86400000);
+          if (newOccEnd > occStart) {
+            targetTask.durationWeeks = Math.max(1, Math.round((newOccEnd - occStart) / (7 * 86400000)));
+            const finalEnd = new Date(parseLocalDate(targetTask.startDate).getTime() + targetTask.durationWeeks * 7 * 86400000);
             targetTask.endDate = formatDateToString(finalEnd);
           }
         }
@@ -1275,7 +1467,17 @@ function renderGanttChart(overrideWidth) {
         const targetTask = state.tasks.find(t => t.id === dragContext.taskId);
         if (targetTask) {
           if (dragContext.dragMode === 'move') {
-            targetTask.projectId = dragContext.hoveredProjId;
+            const newProjId = dragContext.hoveredProjId;
+            const oldProjId = dragContext.startProjectId;
+            if (newProjId !== oldProjId) {
+              const chainIds = getLinkedTaskChain(targetTask.id);
+              chainIds.forEach(cid => {
+                const t = state.tasks.find(x => x.id === cid);
+                if (t) {
+                  t.projectId = newProjId;
+                }
+              });
+            }
           }
           
           // Snap start and end dates to nearest week on drag release
@@ -1314,17 +1516,8 @@ function renderGanttChart(overrideWidth) {
     const task = row.data;
     const isDraggingThis = dragContext && dragContext.taskId === task.id && dragContext.dragMode === 'move' && dragContext.mouseRelativeY !== undefined && dragContext.mouseOffsetFromTaskTop !== undefined;
     
-    const x = dateToX(task.startDate);
-    const x2 = dateToX(task.endDate);
-    const barWidth = Math.max(8, x2 - x);
-    
-    let barY;
-    if (isDraggingThis) {
-      barY = dragContext.mouseRelativeY - dragContext.mouseOffsetFromTaskTop;
-    } else {
-      barY = row.y + 4;
-    }
-    const barHeight = rowHeight - 12;
+    // Get all years this task repeats in
+    const years = getTaskIterationYears(task);
     
     const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     group.setAttribute('class', 'task-bar-group');
@@ -1332,171 +1525,191 @@ function renderGanttChart(overrideWidth) {
       group.classList.add('dragging');
     }
     
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    rect.setAttribute('x', x);
-    rect.setAttribute('y', barY);
-    rect.setAttribute('width', barWidth);
-    rect.setAttribute('height', barHeight);
-    rect.setAttribute('fill', row.color);
-    rect.setAttribute('opacity', '0.85');
-    rect.setAttribute('class', 'task-bar-rect');
+    const barHeight = rowHeight - 12;
     
-    // Dynamic cursors for resize/move on hover
-    rect.addEventListener('mousemove', (e) => {
-      if (dragContext) return;
-      const bbox = rect.getBoundingClientRect();
-      const mouseX = e.clientX - bbox.left;
-      const handleSize = Math.min(12, bbox.width / 3);
-      if (mouseX < handleSize) {
-        rect.setAttribute('class', 'task-bar-rect resize-handle-left');
-      } else if (mouseX > bbox.width - handleSize) {
-        rect.setAttribute('class', 'task-bar-rect resize-handle-right');
+    years.forEach(y => {
+      const occ = getTaskOccurrenceDates(task, y);
+      const x = dateToX(occ.startDate);
+      const x2 = dateToX(occ.endDate);
+      const barWidth = Math.max(8, x2 - x);
+      
+      let barY;
+      if (isDraggingThis) {
+        barY = dragContext.mouseRelativeY - dragContext.mouseOffsetFromTaskTop;
       } else {
-        rect.setAttribute('class', 'task-bar-rect drag-handle-move');
-      }
-    });
-    
-    rect.addEventListener('mouseleave', () => {
-      if (!dragContext) {
-        rect.setAttribute('class', 'task-bar-rect');
-      }
-    });
-    
-    // Drag handler setup
-    rect.addEventListener('mousedown', (e) => {
-      const bbox = rect.getBoundingClientRect();
-      const mouseX = e.clientX - bbox.left;
-      const handleSize = Math.min(12, bbox.width / 3);
-      
-      let dragMode = 'move';
-      if (mouseX < handleSize) {
-        dragMode = 'resize-start';
-      } else if (mouseX > bbox.width - handleSize) {
-        dragMode = 'resize-end';
+        barY = row.y + 4;
       }
       
-      initiateDrag(e, task, dragMode);
-    });
-    
-    group.appendChild(rect);
-    
-    // Deciding label position: Inside if wide enough, otherwise outside
-    let label = task.name;
-    const estimatedTextWidth = label.length * 6.5;
-    const buttonsWidth = 62;
-    const totalNeededWidth = estimatedTextWidth + buttonsWidth + 24;
-    const isWide = barWidth > totalNeededWidth;
-    
-    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    
-    // Position label relative to the task bar box
-    const textX = isWide ? x + 8 : x + barWidth + 8;
-    const textY = barY + (barHeight / 2) + 4;
-    
-    text.setAttribute('x', textX);
-    text.setAttribute('y', textY);
-    
-    if (isDraggingThis) {
-      text.setAttribute('fill', 'var(--text-primary)');
-      text.setAttribute('class', 'task-text floating-drag-label');
-    } else {
-      if (isWide) {
-        text.setAttribute('fill', 'var(--bg-secondary)');
-        text.setAttribute('font-weight', '500');
-      } else {
-        text.setAttribute('fill', 'var(--text-primary)');
-      }
-      text.setAttribute('class', 'task-text');
-    }
-    
-    text.textContent = label;
-    
-    // Support grabbing the task via clicking/dragging the text label
-    text.addEventListener('mousedown', (e) => {
-      initiateDrag(e, task, 'move');
-    });
-    
-    group.appendChild(text);
-    
-    // Render Task Hover Action Buttons (Edit, Duplicate, Delete) next to labels
-    const actionsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    actionsGroup.setAttribute('class', 'task-actions-group');
-    
-    const buttonsStartX = textX + estimatedTextWidth + 12;
-    const buttonsCenterY = textY - 4.5;
-    
-    function createSvgButton(btnX, btnY, iconType, isInside, onClick) {
-      const btn = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      btn.setAttribute('class', `svg-action-btn${isInside ? '-inside' : ''} ${iconType === 'delete' ? 'delete' : ''}`);
-      btn.setAttribute('transform', `translate(${btnX}, ${btnY})`);
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rect.setAttribute('x', x);
+      rect.setAttribute('y', barY);
+      rect.setAttribute('width', barWidth);
+      rect.setAttribute('height', barHeight);
+      rect.setAttribute('fill', row.color);
+      rect.setAttribute('opacity', '0.85');
+      rect.setAttribute('class', 'task-bar-rect');
       
-      const buttonRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      buttonRect.setAttribute('width', '18');
-      buttonRect.setAttribute('height', '18');
-      btn.appendChild(buttonRect);
+      // Dynamic cursors for resize/move on hover
+      rect.addEventListener('mousemove', (e) => {
+        if (dragContext) return;
+        const bbox = rect.getBoundingClientRect();
+        const mouseX = e.clientX - bbox.left;
+        const handleSize = Math.min(12, bbox.width / 3);
+        if (mouseX < handleSize) {
+          rect.setAttribute('class', 'task-bar-rect resize-handle-left');
+        } else if (mouseX > bbox.width - handleSize) {
+          rect.setAttribute('class', 'task-bar-rect resize-handle-right');
+        } else {
+          rect.setAttribute('class', 'task-bar-rect drag-handle-move');
+        }
+      });
       
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      if (iconType === 'edit') {
-        path.setAttribute('d', 'M3 15h3L14.5 6.5l-3-3L3 12v3M11.5 3.5l3 3');
-        path.setAttribute('stroke-linecap', 'round');
-        path.setAttribute('stroke-linejoin', 'round');
-      } else if (iconType === 'duplicate') {
-        const innerRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-        innerRect.setAttribute('x', '3');
-        innerRect.setAttribute('y', '6');
-        innerRect.setAttribute('width', '8');
-        innerRect.setAttribute('height', '8');
-        innerRect.setAttribute('rx', '1.5');
-        innerRect.setAttribute('ry', '1.5');
-        innerRect.setAttribute('fill', 'none');
-        innerRect.setAttribute('stroke-width', '1.2');
-        btn.appendChild(innerRect);
+      rect.addEventListener('mouseleave', () => {
+        if (!dragContext) {
+          rect.setAttribute('class', 'task-bar-rect');
+        }
+      });
+      
+      // Drag handler setup
+      rect.addEventListener('mousedown', (e) => {
+        const bbox = rect.getBoundingClientRect();
+        const mouseX = e.clientX - bbox.left;
+        const handleSize = Math.min(12, bbox.width / 3);
         
-        path.setAttribute('d', 'M6 3h7v7');
-        path.setAttribute('stroke-linecap', 'round');
-      } else if (iconType === 'delete') {
-        path.setAttribute('d', 'M3 5h12M5 5v10a1.5 1.5 0 0 0 1.5 1.5h5a1.5 1.5 0 0 0 1.5-1.5V5M7 3h4');
-        path.setAttribute('stroke-linecap', 'round');
-        path.setAttribute('stroke-linejoin', 'round');
+        let dragMode = 'move';
+        if (mouseX < handleSize) {
+          dragMode = 'resize-start';
+        } else if (mouseX > bbox.width - handleSize) {
+          dragMode = 'resize-end';
+        }
+        
+        initiateDrag(e, task, dragMode, y);
+      });
+      
+      group.appendChild(rect);
+      
+      // Deciding label position for this occurrence: Inside if wide enough, otherwise outside
+      const visibleStartX = Math.max(0, x);
+      const visibleEndX = Math.min(viewportWidth, x2);
+      const visibleWidth = Math.max(0, visibleEndX - visibleStartX);
+
+      let label = task.name;
+      const estimatedTextWidth = label.length * 6.5;
+      const buttonsWidth = 62;
+      const totalNeededWidth = estimatedTextWidth + buttonsWidth + 24;
+      const isWide = visibleWidth > totalNeededWidth;
+      
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      
+      // Position label relative to the visible portion of this occurrence
+      const textX = isWide ? visibleStartX + 8 : visibleEndX + 8;
+      const textY = barY + (barHeight / 2) + 4;
+      
+      text.setAttribute('x', textX);
+      text.setAttribute('y', textY);
+      
+      if (isDraggingThis) {
+        text.setAttribute('fill', 'var(--text-primary)');
+        text.setAttribute('class', 'task-text floating-drag-label');
+      } else {
+        if (isWide) {
+          text.setAttribute('fill', 'var(--bg-secondary)');
+          text.setAttribute('font-weight', '500');
+        } else {
+          text.setAttribute('fill', 'var(--text-primary)');
+        }
+        text.setAttribute('class', 'task-text');
       }
       
-      path.setAttribute('fill', 'none');
-      path.setAttribute('stroke-width', '1.2');
-      btn.appendChild(path);
+      text.textContent = label;
       
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onClick();
+      // Support grabbing the task via clicking/dragging the text label
+      text.addEventListener('mousedown', (e) => {
+        initiateDrag(e, task, 'move', y);
       });
       
-      btn.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
+      group.appendChild(text);
+      
+      // Render Task Hover Action Buttons (Edit, Duplicate, Delete) next to labels
+      const actionsGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      actionsGroup.setAttribute('class', 'task-actions-group');
+      
+      const buttonsStartX = textX + estimatedTextWidth + 12;
+      const buttonsCenterY = textY - 4.5;
+      
+      function createSvgButton(btnX, btnY, iconType, isInside, onClick) {
+        const btn = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        btn.setAttribute('class', `svg-action-btn${isInside ? '-inside' : ''} ${iconType === 'delete' ? 'delete' : ''}`);
+        btn.setAttribute('transform', `translate(${btnX}, ${btnY})`);
+        
+        const buttonRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        buttonRect.setAttribute('width', '18');
+        buttonRect.setAttribute('height', '18');
+        btn.appendChild(buttonRect);
+        
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        if (iconType === 'edit') {
+          path.setAttribute('d', 'M3 15h3L14.5 6.5l-3-3L3 12v3M11.5 3.5l3 3');
+          path.setAttribute('stroke-linecap', 'round');
+          path.setAttribute('stroke-linejoin', 'round');
+        } else if (iconType === 'duplicate') {
+          const innerRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          innerRect.setAttribute('x', '3');
+          innerRect.setAttribute('y', '6');
+          innerRect.setAttribute('width', '8');
+          innerRect.setAttribute('height', '8');
+          innerRect.setAttribute('rx', '1.5');
+          innerRect.setAttribute('ry', '1.5');
+          innerRect.setAttribute('fill', 'none');
+          innerRect.setAttribute('stroke-width', '1.2');
+          btn.appendChild(innerRect);
+          
+          path.setAttribute('d', 'M6 3h7v7');
+          path.setAttribute('stroke-linecap', 'round');
+        } else if (iconType === 'delete') {
+          path.setAttribute('d', 'M3 5h12M5 5v10a1.5 1.5 0 0 0 1.5 1.5h5a1.5 1.5 0 0 0 1.5-1.5V5M7 3h4');
+          path.setAttribute('stroke-linecap', 'round');
+          path.setAttribute('stroke-linejoin', 'round');
+        }
+        
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-width', '1.2');
+        btn.appendChild(path);
+        
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClick();
+        });
+        
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+        
+        btn.addEventListener('mouseenter', (e) => {
+          e.stopPropagation();
+          hideTooltip();
+        });
+        
+        return btn;
+      }
+      
+      const editBtn = createSvgButton(buttonsStartX, buttonsCenterY - 9, 'edit', isWide && !isDraggingThis, () => {
+        editTask(task.id);
+      });
+      const dupBtn = createSvgButton(buttonsStartX + 22, buttonsCenterY - 9, 'duplicate', isWide && !isDraggingThis, () => {
+        duplicateTask(task.id);
+      });
+      const delBtn = createSvgButton(buttonsStartX + 44, buttonsCenterY - 9, 'delete', isWide && !isDraggingThis, () => {
+        deleteTask(task.id);
       });
       
-      btn.addEventListener('mouseenter', (e) => {
-        e.stopPropagation();
-        hideTooltip();
-      });
-      
-      return btn;
-    }
-    
-    const editBtn = createSvgButton(buttonsStartX, buttonsCenterY - 9, 'edit', isWide && !isDraggingThis, () => {
-      editTask(task.id);
+      actionsGroup.appendChild(editBtn);
+      actionsGroup.appendChild(dupBtn);
+      actionsGroup.appendChild(delBtn);
+      group.appendChild(actionsGroup);
     });
-    const dupBtn = createSvgButton(buttonsStartX + 22, buttonsCenterY - 9, 'duplicate', isWide && !isDraggingThis, () => {
-      duplicateTask(task.id);
-    });
-    const delBtn = createSvgButton(buttonsStartX + 44, buttonsCenterY - 9, 'delete', isWide && !isDraggingThis, () => {
-      deleteTask(task.id);
-    });
-    
-    actionsGroup.appendChild(editBtn);
-    actionsGroup.appendChild(dupBtn);
-    actionsGroup.appendChild(delBtn);
-    group.appendChild(actionsGroup);
     
     group.addEventListener('click', () => {
       editTask(task.id);
@@ -1504,19 +1717,24 @@ function renderGanttChart(overrideWidth) {
     
     group.addEventListener('mouseenter', (e) => {
       if (dragContext) return;
+      const assigneesList = task.assignee ? task.assignee.split(',').map(a => a.trim()).filter(Boolean) : [];
+      let assigneeHtml = '';
+      if (assigneesList.length === 0) {
+        assigneeHtml = `<span class="assignee-badge unassigned">Unassigned</span>`;
+      } else {
+        assigneeHtml = assigneesList.map(a => `<span class="assignee-badge">${a}</span>`).join(' ');
+      }
       const tooltipHtml = `
         <h4>${task.name}</h4>
         <div><strong>Start:</strong> ${task.startDate}</div>
         <div><strong>End:</strong> ${task.endDate}</div>
         <div><strong>Duration:</strong> ${task.durationWeeks} weeks</div>
-        <div><strong>Assignee:</strong> ${task.assignee || 'Unassigned'}</div>
+        <div style="margin-top: 4px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap;"><strong>Assignee(s):</strong> ${assigneeHtml}</div>
       `;
       showTooltip(e, tooltipHtml);
     });
-    
     group.addEventListener('mouseleave', hideTooltip);
     svg.appendChild(group);
-    
   }
 
   // Helper: create a small SVG icon button for project headers
@@ -1704,11 +1922,17 @@ function renderGanttChart(overrideWidth) {
           dia.addEventListener('click', (e) => { e.stopPropagation(); editDeadline(dead.id); });
           dia.addEventListener('mouseenter', (e) => {
             e.stopPropagation();
-            const task = row.taskLookup.find(t => t.id === dead.taskId);
+            let parentLabel = 'General Tasks';
+            if (row.projectId !== 'none') {
+              const project = state.projects.find(p => p.id === row.projectId);
+              if (project) {
+                parentLabel = project.name;
+              }
+            }
             showTooltip(e, `
               <h4 style="color:var(--warning)">⬦ ${dead.name}</h4>
               <div><strong>Date:</strong> ${dead.date}</div>
-              <div style="font-size:0.7rem; color:var(--text-tertiary);">Task: "${task ? task.name : 'Unknown'}"</div>
+              <div style="font-size:0.7rem; color:var(--text-tertiary);">Project: "${parentLabel}"</div>
             `);
           });
           dia.addEventListener('mouseleave', hideTooltip);
@@ -1905,18 +2129,20 @@ function renderDataTable() {
       if (!state.ui.filterProjects.includes(pId)) return false;
     }
     
-    const assigneeName = (t.assignee || 'Unassigned').trim();
-    if (!state.ui.filterAssignees.includes(assigneeName)) return false;
+    const taskAssignees = t.assignee ? t.assignee.split(',').map(a => a.trim()).filter(Boolean) : [];
+    if (taskAssignees.length === 0) {
+      taskAssignees.push('Unassigned');
+    }
+    const hasMatch = taskAssignees.some(a => state.ui.filterAssignees.includes(a));
+    if (!hasMatch) return false;
     
     return true;
   });
 
   // Filter Deadlines
   const filteredDeadlines = state.deadlines.filter(d => {
-    if (d.taskId && d.taskId !== 'none') {
-      return filteredTasks.some(t => t.id === d.taskId);
-    }
-    return false;
+    const pId = d.projectId || 'none';
+    return state.ui.filterProjects.includes(pId);
   });
 
   const totalFilteredCount = filteredTasks.length + filteredDeadlines.length;
@@ -1928,7 +2154,7 @@ function renderDataTable() {
     let hasUnassigned = false;
     state.tasks.forEach(t => {
       if (t.assignee && t.assignee.trim()) {
-        uniqueAssignees.add(t.assignee.trim());
+        t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => uniqueAssignees.add(a));
       } else {
         hasUnassigned = true;
       }
@@ -1975,13 +2201,12 @@ function renderDataTable() {
   });
   
   filteredDeadlines.forEach(d => {
-    const task = state.tasks.find(t => t.id === d.taskId);
-    const proj = task ? state.projects.find(p => p.id === task.projectId) : null;
+    const proj = state.projects.find(p => p.id === d.projectId);
     items.push({
       id: d.id,
       type: 'Deadline',
       name: d.name,
-      projectName: proj ? proj.name : (task ? 'General Tasks' : 'None'),
+      projectName: proj ? proj.name : 'General Tasks',
       colorIndex: proj ? proj.colorIndex : 8,
       startDate: 'N/A',
       endDate: d.date,
@@ -2002,6 +2227,18 @@ function renderDataTable() {
     const tr = document.createElement('tr');
     const colorClass = PALETTE[item.colorIndex] ? PALETTE[item.colorIndex].class : 'proj-color-9';
     
+    let assigneeHtml = '';
+    if (item.type === 'Deadline') {
+      assigneeHtml = 'N/A';
+    } else {
+      const assigneesList = item.assignee ? item.assignee.split(',').map(a => a.trim()).filter(Boolean) : [];
+      if (assigneesList.length === 0) {
+        assigneeHtml = `<span class="assignee-badge unassigned">Unassigned</span>`;
+      } else {
+        assigneeHtml = assigneesList.map(a => `<span class="assignee-badge">${a}</span>`).join(' ');
+      }
+    }
+    
     tr.innerHTML = `
       <td>
         <span class="color-indicator" style="background: var(--${colorClass})"></span>
@@ -2016,7 +2253,7 @@ function renderDataTable() {
       <td>${item.startDate}</td>
       <td>${item.endDate}</td>
       <td>${item.duration}</td>
-      <td>${item.assignee}</td>
+      <td>${assigneeHtml}</td>
       <td style="text-align: right;">
         <div class="actions-cell" style="justify-content: flex-end;">
           <button class="action-btn-mini" onclick="${item.type === 'Task' ? `editTask` : `editDeadline`}('${item.id}')" title="Edit Item">
@@ -2089,7 +2326,7 @@ function populateSidebarFilters() {
   let hasUnassigned = false;
   state.tasks.forEach(t => {
     if (t.assignee && t.assignee.trim()) {
-      assignees.add(t.assignee.trim());
+      t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => assignees.add(a));
     } else {
       hasUnassigned = true;
     }
@@ -2577,6 +2814,78 @@ function showConfirmationModal(title, message, isDanger, onConfirm, doubleConfir
   openModal('confirmModal');
 }
 
+// Reset linked action dialog values
+let linkedActionSingleCallback = null;
+let linkedActionChainCallback = null;
+
+function showLinkedActionModal(title, message, isDanger, onSingle, onChain) {
+  const modal = document.getElementById('linkedActionModal');
+  const titleEl = document.getElementById('linkedActionTitle');
+  const msgEl = document.getElementById('linkedActionMessage');
+  const singleBtn = document.getElementById('linkedActionSingleBtn');
+  const chainBtn = document.getElementById('linkedActionChainBtn');
+  
+  titleEl.textContent = title;
+  msgEl.textContent = message;
+  
+  if (isDanger) {
+    singleBtn.className = 'btn btn-danger';
+    chainBtn.className = 'btn btn-danger';
+  } else {
+    singleBtn.className = 'btn btn-primary';
+    chainBtn.className = 'btn btn-primary';
+  }
+  
+  linkedActionSingleCallback = () => {
+    onSingle();
+    closeModal('linkedActionModal');
+  };
+  
+  linkedActionChainCallback = () => {
+    onChain();
+    closeModal('linkedActionModal');
+  };
+  
+  singleBtn.onclick = linkedActionSingleCallback;
+  chainBtn.onclick = linkedActionChainCallback;
+  
+  openModal('linkedActionModal');
+}
+
+function addAssigneePill(name) {
+  const cleanName = name.trim();
+  if (!cleanName) return;
+  
+  const container = document.getElementById('taskAssigneesContainer');
+  if (!container) return;
+  
+  // Check if already exists
+  const existingPills = container.querySelectorAll('.assignee-pill');
+  for (let pill of existingPills) {
+    if (pill.dataset.name.toLowerCase() === cleanName.toLowerCase()) {
+      return;
+    }
+  }
+  
+  const pill = document.createElement('div');
+  pill.className = 'assignee-pill';
+  pill.dataset.name = cleanName;
+  
+  const span = document.createElement('span');
+  span.textContent = cleanName;
+  
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'assignee-pill-remove';
+  removeBtn.innerHTML = '&times;';
+  removeBtn.title = `Remove ${cleanName}`;
+  removeBtn.onclick = () => pill.remove();
+  
+  pill.appendChild(span);
+  pill.appendChild(removeBtn);
+  container.appendChild(pill);
+}
+
 // ==========================================
 // AUTOCOMPLETE FOR ASSIGNEES
 // ==========================================
@@ -2591,18 +2900,42 @@ function setupAssigneeAutocomplete() {
   
   // Collect unique assignees
   input.addEventListener('input', () => {
-    const query = input.value.trim().toLowerCase();
+    let val = input.value;
+    if (val.includes(',')) {
+      const parts = val.split(',');
+      for (let i = 0; i < parts.length - 1; i++) {
+        const part = parts[i].trim();
+        if (part) {
+          addAssigneePill(part);
+        }
+      }
+      input.value = parts[parts.length - 1].trimLeft();
+      val = input.value;
+    }
     
-    // Gather names
+    const query = val.trim().toLowerCase();
+    
+    // Gather names by splitting existing assignees
     const names = new Set();
     state.tasks.forEach(t => {
       if (t.assignee && t.assignee.trim()) {
-        names.add(t.assignee.trim());
+        t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => names.add(a));
       }
     });
     
+    // Filter out names that are already added as pills
+    const container = document.getElementById('taskAssigneesContainer');
+    const existingNames = new Set();
+    if (container) {
+      container.querySelectorAll('.assignee-pill').forEach(pill => {
+        existingNames.add(pill.dataset.name.toLowerCase());
+      });
+    }
+    
     autocompleteList = Array.from(names).filter(n => 
-      n.toLowerCase().includes(query) && n.toLowerCase() !== query
+      n.toLowerCase().includes(query) && 
+      n.toLowerCase() !== query &&
+      !existingNames.has(n.toLowerCase())
     ).sort();
     
     if (autocompleteList.length > 0 && query.length > 0) {
@@ -2615,24 +2948,32 @@ function setupAssigneeAutocomplete() {
   
   // Handle keys: ArrowDown, ArrowUp, Enter
   input.addEventListener('keydown', (e) => {
-    const items = dropdown.querySelectorAll('.autocomplete-item');
-    if (dropdown.style.display !== 'block') return;
-    
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      highlightedAutocompleteIndex = (highlightedAutocompleteIndex + 1) % autocompleteList.length;
-      updateAutocompleteSelection(items);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      highlightedAutocompleteIndex = (highlightedAutocompleteIndex - 1 + autocompleteList.length) % autocompleteList.length;
-      updateAutocompleteSelection(items);
-    } else if (e.key === 'Enter') {
-      if (highlightedAutocompleteIndex >= 0 && highlightedAutocompleteIndex < autocompleteList.length) {
-        e.preventDefault();
+    if (e.key === 'Enter') {
+      e.preventDefault(); // Always prevent form submit when pressing Enter in assignee input
+      
+      if (dropdown.style.display === 'block' && highlightedAutocompleteIndex >= 0 && highlightedAutocompleteIndex < autocompleteList.length) {
         selectAutocompleteName(autocompleteList[highlightedAutocompleteIndex]);
+      } else {
+        const val = input.value.trim();
+        if (val) {
+          addAssigneePill(val);
+          input.value = '';
+          hideAssigneeAutocomplete();
+        }
       }
-    } else if (e.key === 'Escape') {
-      hideAssigneeAutocomplete();
+    } else if (dropdown.style.display === 'block') {
+      const items = dropdown.querySelectorAll('.autocomplete-item');
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        highlightedAutocompleteIndex = (highlightedAutocompleteIndex + 1) % autocompleteList.length;
+        updateAutocompleteSelection(items);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        highlightedAutocompleteIndex = (highlightedAutocompleteIndex - 1 + autocompleteList.length) % autocompleteList.length;
+        updateAutocompleteSelection(items);
+      } else if (e.key === 'Escape') {
+        hideAssigneeAutocomplete();
+      }
     }
   });
   
@@ -2672,9 +3013,10 @@ function updateAutocompleteSelection(items) {
 }
 
 function selectAutocompleteName(name) {
+  addAssigneePill(name);
   const input = document.getElementById('taskAssigneeInput');
   if (input) {
-    input.value = name;
+    input.value = '';
   }
   hideAssigneeAutocomplete();
 }
@@ -2808,15 +3150,12 @@ function duplicateProject(id) {
   document.getElementById('duplicateCopyTasks').checked = true;
   document.getElementById('duplicateCopyDeadlines').checked = true;
   
-  // Toggle deadlines checkbox based on tasks checkbox
+  // Decoupled checkboxes: remove onchange listener and reset opacity
   const tasksCheck = document.getElementById('duplicateCopyTasks');
   const deadlinesCheck = document.getElementById('duplicateCopyDeadlines');
   const deadlinesContainer = document.getElementById('duplicateCopyDeadlinesContainer');
   
-  tasksCheck.onchange = () => {
-    deadlinesContainer.style.opacity = tasksCheck.checked ? '1' : '0.4';
-    if (!tasksCheck.checked) deadlinesCheck.checked = false;
-  };
+  tasksCheck.onchange = null;
   deadlinesContainer.style.opacity = '1';
   
   const confirmBtn = document.getElementById('duplicateProjectConfirmBtn');
@@ -2849,13 +3188,6 @@ function duplicateProject(id) {
         state.tasks.push(newTask);
       });
       
-      // Re-map internal dependencies (if both tasks are copied)
-      state.tasks.forEach(t => {
-        if (taskIdMap[t.id] !== undefined) return; // already a new copy
-        // For newly copied tasks: restore dependency links if the predecessor was also copied
-        const newTask = state.tasks.find(nt => nt.id === taskIdMap[Object.keys(taskIdMap).find(oldId => taskIdMap[oldId] === nt.id)]);
-      });
-      
       // Fix dependencies inside the copied task set
       Object.keys(taskIdMap).forEach(oldId => {
         const originalTask = state.tasks.find(t => t.id === oldId);
@@ -2865,20 +3197,18 @@ function duplicateProject(id) {
           newTask.startType = 'dependency';
         }
       });
-      
-      if (copyDeadlines) {
-        const projectTaskIds = Object.keys(taskIdMap);
-        state.deadlines.forEach(dead => {
-          if (projectTaskIds.includes(dead.taskId) && taskIdMap[dead.taskId]) {
-            const newDead = {
-              ...dead,
-              id: 'dead-' + Math.random().toString(36).substr(2, 9),
-              taskId: taskIdMap[dead.taskId]
-            };
-            state.deadlines.push(newDead);
-          }
-        });
-      }
+    }
+
+    if (copyDeadlines) {
+      const projDeadlines = state.deadlines.filter(d => d.projectId === id);
+      projDeadlines.forEach(dead => {
+        const newDead = {
+          ...dead,
+          id: 'dead-' + Math.random().toString(36).substr(2, 9),
+          projectId: newProjId
+        };
+        state.deadlines.push(newDead);
+      });
     }
     
     closeModal('duplicateProjectModal');
@@ -2898,7 +3228,7 @@ function deleteProject(id) {
   
   const projectTasks = state.tasks.filter(t => t.projectId === id);
   const projectTaskIds = projectTasks.map(t => t.id);
-  const projectDeadlines = state.deadlines.filter(d => projectTaskIds.includes(d.taskId));
+  const projectDeadlines = state.deadlines.filter(d => d.projectId === id);
   
   // Populate modal
   document.getElementById('deleteProjectName').textContent = `"${project.name}"`;
@@ -2914,16 +3244,21 @@ function deleteProject(id) {
     const action = document.querySelector('input[name="deleteProjectAction"]:checked').value;
     
     if (action === 'move') {
-      // Move tasks to General (projectId = 'none') and keep deadlines linked
+      // Move tasks and deadlines to General (projectId = 'none')
       state.tasks.forEach(t => {
         if (t.projectId === id) {
           t.projectId = 'none';
         }
       });
+      state.deadlines.forEach(d => {
+        if (d.projectId === id) {
+          d.projectId = 'none';
+        }
+      });
     } else {
-      // Delete all tasks and their deadlines
+      // Delete all tasks and the project's deadlines
       state.tasks = state.tasks.filter(t => t.projectId !== id);
-      state.deadlines = state.deadlines.filter(d => !projectTaskIds.includes(d.taskId));
+      state.deadlines = state.deadlines.filter(d => d.projectId !== id);
       
       // Clear dependency links pointing to deleted tasks
       state.tasks.forEach(t => {
@@ -3010,10 +3345,15 @@ function setTaskEndType(type) {
 }
 
 function addTask() {
+  // Load predecessors excluding none
+  syncPredecessorDropdown('');
+  
   document.getElementById('taskModalTitle').textContent = 'Add Task';
   document.getElementById('taskIdField').value = '';
   document.getElementById('taskNameInput').value = '';
   document.getElementById('taskAssigneeInput').value = '';
+  const container = document.getElementById('taskAssigneesContainer');
+  if (container) container.innerHTML = '';
   document.getElementById('taskPredecessorSelect').value = '';
   document.getElementById('taskProjectSelect').value = 'none';
   document.getElementById('taskRecurrenceCheck').checked = false;
@@ -3026,15 +3366,15 @@ function addTask() {
   setTaskStartType('date');
   setTaskEndType('duration');
   
-  // Load predecessors excluding none
-  syncPredecessorDropdown('');
-  
   openModal('taskModal');
 }
 
 function editTask(id) {
   const task = state.tasks.find(t => t.id === id);
   if (!task) return;
+  
+  // Load predecessors excluding this task to avoid self-cycles
+  syncPredecessorDropdown(task.id);
   
   document.getElementById('taskModalTitle').textContent = 'Edit Task';
   document.getElementById('taskIdField').value = task.id;
@@ -3044,14 +3384,22 @@ function editTask(id) {
   document.getElementById('taskPredecessorSelect').value = task.startAfterTaskId || '';
   document.getElementById('taskDurationWeeks').value = task.durationWeeks || 4;
   document.getElementById('taskEndDate').value = task.endDate || '';
-  document.getElementById('taskAssigneeInput').value = task.assignee || '';
+  document.getElementById('taskAssigneeInput').value = '';
+  
+  const container = document.getElementById('taskAssigneesContainer');
+  if (container) {
+    container.innerHTML = '';
+    if (task.assignee && task.assignee.trim()) {
+      task.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(name => {
+        addAssigneePill(name);
+      });
+    }
+  }
+  
   document.getElementById('taskRecurrenceCheck').checked = false; // reset
   
   setTaskStartType(task.startType || 'date');
   setTaskEndType(task.endType || 'duration');
-  
-  // Load predecessors excluding this task to avoid self-cycles
-  syncPredecessorDropdown(task.id);
   
   openModal('taskModal');
 }
@@ -3066,7 +3414,20 @@ function handleTaskSubmit(e) {
   const startAfterTaskId = document.getElementById('taskPredecessorSelect').value;
   const endType = document.getElementById('taskEndType').value;
   const durationInput = parseInt(document.getElementById('taskDurationWeeks').value, 10);
-  const assignee = document.getElementById('taskAssigneeInput').value.trim();
+  
+  const assigneePillNames = [];
+  const container = document.getElementById('taskAssigneesContainer');
+  if (container) {
+    container.querySelectorAll('.assignee-pill').forEach(pill => {
+      assigneePillNames.push(pill.dataset.name);
+    });
+  }
+  // Include any typed text that wasn't submitted as a pill
+  const inputVal = document.getElementById('taskAssigneeInput').value.trim();
+  if (inputVal && !assigneePillNames.includes(inputVal)) {
+    assigneePillNames.push(inputVal);
+  }
+  const assignee = assigneePillNames.join(', ');
   const repeatAcrossYears = document.getElementById('taskRecurrenceCheck').checked;
   
   let startDate = '';
@@ -3105,6 +3466,16 @@ function handleTaskSubmit(e) {
     // Edit existing task
     targetTask = state.tasks.find(t => t.id === id);
     if (targetTask) {
+      const oldProjId = targetTask.projectId;
+      if (projectId !== oldProjId) {
+        const chainIds = getLinkedTaskChain(targetTask.id);
+        chainIds.forEach(cid => {
+          const t = state.tasks.find(x => x.id === cid);
+          if (t) {
+            t.projectId = projectId;
+          }
+        });
+      }
       targetTask.projectId = projectId;
       targetTask.name = name;
       targetTask.startDate = startDate;
@@ -3132,20 +3503,33 @@ function handleTaskSubmit(e) {
     state.tasks.push(targetTask);
   }
   
-  // Auto-tick the assignee (or "Unassigned")
-  const cleanAssignee = assignee ? assignee.trim() : 'Unassigned';
-  if (!state.ui.filterAssignees.includes(cleanAssignee)) {
-    state.ui.filterAssignees.push(cleanAssignee);
+  // Auto-tick the assignees
+  const taskAssignees = assignee ? assignee.split(',').map(a => a.trim()).filter(Boolean) : [];
+  if (taskAssignees.length === 0) {
+    if (!state.ui.filterAssignees.includes('Unassigned')) {
+      state.ui.filterAssignees.push('Unassigned');
+    }
+  } else {
+    taskAssignees.forEach(a => {
+      if (!state.ui.filterAssignees.includes(a)) {
+        state.ui.filterAssignees.push(a);
+      }
+    });
+  }
+  
+  // Set recurrence flag directly on the task
+  targetTask.isIterated = repeatAcrossYears;
+  
+  // If task is dependent on an iterated task, make it iterated also
+  if (startType === 'dependency' && startAfterTaskId) {
+    const predecessor = state.tasks.find(t => t.id === startAfterTaskId);
+    if (predecessor && predecessor.isIterated) {
+      targetTask.isIterated = true;
+    }
   }
   
   // Propagate cascading dependencies downstream
   updateTaskDependencies(targetTask.id);
-  
-  // If recurrence checkbox is selected, copy the task
-  if (repeatAcrossYears && projectId !== 'none') {
-    const project = state.projects.find(p => p.id === projectId);
-    createRecurrentCopies(targetTask, project);
-  }
   
   saveState(true);
   closeModal('taskModal');
@@ -3159,55 +3543,128 @@ function duplicateTask(id) {
   const task = state.tasks.find(t => t.id === id);
   if (!task) return;
   
-  const duplicated = {
-    ...task,
-    id: 'task-' + Math.random().toString(36).substr(2, 9),
-    name: `${task.name} (Copy)`,
-    startAfterTaskId: null, // clear dependency on duplication
-    startType: 'date'
-  };
-  
-  state.tasks.push(duplicated);
-  saveState(true);
-  syncDropdowns();
-  renderGanttChart();
-  renderDataTable();
+  const chainIds = getLinkedTaskChain(id);
+  if (chainIds.length > 1) {
+    showLinkedActionModal(
+      'Duplicate Linked Tasks',
+      `The task "${task.name}" is part of a dependency chain. Do you want to duplicate only this task or the entire chain of linked tasks?`,
+      false,
+      () => {
+        // Duplicate single task
+        const duplicated = {
+          ...task,
+          id: 'task-' + Math.random().toString(36).substr(2, 9),
+          name: `${task.name} (Copy)`,
+          startAfterTaskId: null,
+          startType: 'date'
+        };
+        state.tasks.push(duplicated);
+        saveState(true);
+        syncDropdowns();
+        renderGanttChart();
+        renderDataTable();
+      },
+      () => {
+        // Duplicate entire chain
+        const idMap = {};
+        const newTasks = [];
+        chainIds.forEach(cid => {
+          const orig = state.tasks.find(t => t.id === cid);
+          if (orig) {
+            const newId = 'task-' + Math.random().toString(36).substr(2, 9);
+            idMap[cid] = newId;
+            newTasks.push({
+              ...orig,
+              id: newId,
+              name: `${orig.name} (Copy)`
+            });
+          }
+        });
+        newTasks.forEach(nt => {
+          if (nt.startType === 'dependency' && nt.startAfterTaskId) {
+            const newPredId = idMap[nt.startAfterTaskId];
+            if (newPredId) {
+              nt.startAfterTaskId = newPredId;
+            }
+          }
+        });
+        state.tasks.push(...newTasks);
+        saveState(true);
+        syncDropdowns();
+        renderGanttChart();
+        renderDataTable();
+      }
+    );
+  } else {
+    // Normal single task duplication
+    const duplicated = {
+      ...task,
+      id: 'task-' + Math.random().toString(36).substr(2, 9),
+      name: `${task.name} (Copy)`,
+      startAfterTaskId: null,
+      startType: 'date'
+    };
+    state.tasks.push(duplicated);
+    saveState(true);
+    syncDropdowns();
+    renderGanttChart();
+    renderDataTable();
+  }
 }
 
 function deleteTask(id) {
   const task = state.tasks.find(t => t.id === id);
   if (!task) return;
   
-  // Count dependencies
-  const deps = state.tasks.filter(t => t.startAfterTaskId === id);
-  const deadlinesCount = state.deadlines.filter(d => d.taskId === id).length;
-  
-  let warningMsg = `Are you sure you want to delete the task "${task.name}"?`;
-  if (deps.length > 0 || deadlinesCount > 0) {
-    warningMsg += `\n\nWarning: ${deps.length} dependent task(s) and ${deadlinesCount} deadline(s) will be affected (their dependencies/connections will be cleared).`;
-  }
-  
-  showConfirmationModal('Delete Task', warningMsg, true, () => {
-    // Clean up dependent tasks (convert them to manual start date)
-    state.tasks.forEach(t => {
-      if (t.startAfterTaskId === id) {
-        t.startAfterTaskId = null;
-        t.startType = 'date';
+  const chainIds = getLinkedTaskChain(id);
+  if (chainIds.length > 1) {
+    showLinkedActionModal(
+      'Delete Linked Tasks',
+      `The task "${task.name}" is part of a dependency chain. Do you want to delete only this task or the entire chain of linked tasks?`,
+      true,
+      () => {
+        // Delete single task
+        state.tasks.forEach(t => {
+          if (t.startAfterTaskId === id) {
+            t.startAfterTaskId = null;
+            t.startType = 'date';
+          }
+        });
+        state.tasks = state.tasks.filter(t => t.id !== id);
+        saveState(true);
+        syncDropdowns();
+        populateSidebarFilters();
+        renderGanttChart();
+        renderDataTable();
+      },
+      () => {
+        // Delete entire chain
+        state.tasks = state.tasks.filter(t => !chainIds.includes(t.id));
+        saveState(true);
+        syncDropdowns();
+        populateSidebarFilters();
+        renderGanttChart();
+        renderDataTable();
       }
+    );
+  } else {
+    // Normal delete confirmation
+    showConfirmationModal('Delete Task', `Are you sure you want to delete the task "${task.name}"?`, true, () => {
+      // Clean up dependent tasks (convert them to manual start date)
+      state.tasks.forEach(t => {
+        if (t.startAfterTaskId === id) {
+          t.startAfterTaskId = null;
+          t.startType = 'date';
+        }
+      });
+      state.tasks = state.tasks.filter(t => t.id !== id);
+      saveState(true);
+      syncDropdowns();
+      populateSidebarFilters();
+      renderGanttChart();
+      renderDataTable();
     });
-    
-    // Clean up deadlines associated
-    state.deadlines = state.deadlines.filter(d => d.taskId !== id);
-    
-    // Remove the task
-    state.tasks = state.tasks.filter(t => t.id !== id);
-    
-    saveState(true);
-    syncDropdowns();
-    populateSidebarFilters();
-    renderGanttChart();
-    renderDataTable();
-  });
+  }
 }
 
 // ==========================================
@@ -3215,27 +3672,42 @@ function deleteTask(id) {
 // ==========================================
 
 function addDeadline() {
-  if (state.tasks.length === 0) {
-    alert("Please add at least one Task before adding a Deadline.");
-    return;
-  }
-  
   document.getElementById('deadlineModalTitle').textContent = 'Add Deadline';
   document.getElementById('deadlineIdField').value = '';
   document.getElementById('deadlineNameInput').value = '';
   
-  // Load tasks dropdown
-  syncDeadlineTasksDropdown();
+  // Load projects dropdown
+  syncDeadlineProjectsDropdown();
   
-  // Select first task and set default deadline date
-  const taskSelect = document.getElementById('deadlineTaskSelect');
-  if (taskSelect.options.length > 0) {
-    taskSelect.selectedIndex = 0;
-    const task = state.tasks.find(t => t.id === taskSelect.value);
-    if (task) {
-      document.getElementById('deadlineDateInput').value = task.endDate;
+  // Select first project and set default deadline date
+  const projSelect = document.getElementById('deadlineProjectSelect');
+  if (projSelect.options.length > 0) {
+    projSelect.selectedIndex = 0;
+    const pId = projSelect.value;
+    if (pId === 'none') {
+      document.getElementById('deadlineDateInput').value = formatDateToString(new Date());
+    } else {
+      const proj = state.projects.find(p => p.id === pId);
+      if (proj && proj.endMonth) {
+        document.getElementById('deadlineDateInput').value = proj.endMonth + '-01';
+      } else {
+        document.getElementById('deadlineDateInput').value = formatDateToString(new Date());
+      }
     }
   }
+  
+  // Add onchange handler to auto-suggest date when changing project in Add mode
+  projSelect.onchange = () => {
+    const pId = projSelect.value;
+    if (pId === 'none') {
+      document.getElementById('deadlineDateInput').value = formatDateToString(new Date());
+    } else {
+      const proj = state.projects.find(p => p.id === pId);
+      if (proj && proj.endMonth) {
+        document.getElementById('deadlineDateInput').value = proj.endMonth + '-01';
+      }
+    }
+  };
   
   openModal('deadlineModal');
 }
@@ -3249,8 +3721,10 @@ function editDeadline(id) {
   document.getElementById('deadlineNameInput').value = deadline.name;
   document.getElementById('deadlineDateInput').value = deadline.date;
   
-  syncDeadlineTasksDropdown();
-  document.getElementById('deadlineTaskSelect').value = deadline.taskId;
+  syncDeadlineProjectsDropdown();
+  const projSelect = document.getElementById('deadlineProjectSelect');
+  projSelect.value = deadline.projectId || 'none';
+  projSelect.onchange = null; // Clear onchange listener during edit
   
   openModal('deadlineModal');
 }
@@ -3259,7 +3733,7 @@ function handleDeadlineSubmit(e) {
   e.preventDefault();
   
   const id = document.getElementById('deadlineIdField').value;
-  const taskId = document.getElementById('deadlineTaskSelect').value;
+  const projectId = document.getElementById('deadlineProjectSelect').value;
   const name = document.getElementById('deadlineNameInput').value.trim();
   const date = document.getElementById('deadlineDateInput').value;
   
@@ -3267,7 +3741,7 @@ function handleDeadlineSubmit(e) {
     // Edit
     const dead = state.deadlines.find(d => d.id === id);
     if (dead) {
-      dead.taskId = taskId;
+      dead.projectId = projectId;
       dead.name = name;
       dead.date = date;
     }
@@ -3275,7 +3749,7 @@ function handleDeadlineSubmit(e) {
     // Add
     const newDead = {
       id: 'dead-' + Math.random().toString(36).substr(2, 9),
-      taskId,
+      projectId,
       name,
       date
     };
@@ -3318,6 +3792,8 @@ function syncDropdowns() {
     });
     pSelect.value = val;
   }
+  // 2. Projects lists on Deadline modal
+  syncDeadlineProjectsDropdown();
 }
 
 // Loads predecessor tasks excluding the active editing task (to prevent circular references)
@@ -3353,15 +3829,15 @@ function syncPredecessorDropdown(excludeTaskId) {
   }
 }
 
-function syncDeadlineTasksDropdown() {
-  const select = document.getElementById('deadlineTaskSelect');
+function syncDeadlineProjectsDropdown() {
+  const select = document.getElementById('deadlineProjectSelect');
   if (!select) return;
   
-  select.innerHTML = '';
-  state.tasks.forEach(t => {
+  select.innerHTML = '<option value="none">None (General Tasks)</option>';
+  state.projects.forEach(p => {
     const opt = document.createElement('option');
-    opt.value = t.id;
-    opt.textContent = t.name;
+    opt.value = p.id;
+    opt.textContent = p.name;
     select.appendChild(opt);
   });
 }
@@ -3427,6 +3903,7 @@ function handleImportFile(e) {
           if (!state.ui) state.ui = {};
           if (!state.ui.theme) state.ui.theme = 'dark';
           if (!state.ui.zoomMonths) state.ui.zoomMonths = 12;
+          if (state.ui.hideListPanel === undefined) state.ui.hideListPanel = false;
           
           // Force migration/initialization for imported states to tick everything by default
           if (!state.ui.filterProjects || state.ui.filterProjects.length === 0) {
@@ -3437,7 +3914,7 @@ function handleImportFile(e) {
             let hasUnassigned = false;
             state.tasks.forEach(t => {
               if (t.assignee && t.assignee.trim()) {
-                assignees.add(t.assignee.trim());
+                t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => assignees.add(a));
               } else {
                 hasUnassigned = true;
               }
@@ -3602,6 +4079,20 @@ function toggleTheme() {
   renderGanttChart();
 }
 
+function toggleListPanel() {
+  const listPanel = document.querySelector('.list-panel');
+  if (!listPanel) return;
+  
+  const isCollapsed = listPanel.classList.toggle('collapsed');
+  state.ui.hideListPanel = isCollapsed;
+  saveState();
+  
+  const btn = document.getElementById('toggleListPanelBtn');
+  if (btn) {
+    btn.title = isCollapsed ? 'Expand panel' : 'Collapse panel';
+  }
+}
+
 function initializeTimelineControls() {
   const slider    = document.getElementById('timelineStartSlider');
   const valLabel  = document.getElementById('timelineStartValueLabel');
@@ -3688,6 +4179,19 @@ window.addEventListener('DOMContentLoaded', () => {
   initializeTimelineControls();
   setupAssigneeAutocomplete();
   updateUndoRedoButtons();
+  
+  // Initialize list panel collapsed state
+  const listPanel = document.querySelector('.list-panel');
+  const toggleBtn = document.getElementById('toggleListPanelBtn');
+  if (listPanel && state.ui.hideListPanel) {
+    listPanel.classList.add('collapsed');
+    if (toggleBtn) {
+      toggleBtn.title = 'Expand panel';
+    }
+  }
+  if (toggleBtn) {
+    toggleBtn.onclick = toggleListPanel;
+  }
   
   // Initial render
   renderGanttChart();
