@@ -2,6 +2,8 @@
 // STATE MANAGEMENT & DATA MODELS
 // ==========================================
 
+const DEVELOPER_LAST_EDIT = "2026-06-14 15:45";
+
 const PALETTE = [
   { name: 'Rose', class: 'proj-color-1', value: 'var(--proj-color-1)' },
   { name: 'Orange', class: 'proj-color-2', value: 'var(--proj-color-2)' },
@@ -239,7 +241,6 @@ function saveState(isDataModification = false) {
       if (undoStack.length > MAX_UNDO_HISTORY) undoStack.shift();
       redoStack = []; // new action clears redo
     }
-    state.lastEdit = new Date().toLocaleString();
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   renderLastEdit();
@@ -257,7 +258,7 @@ function saveState(isDataModification = false) {
 function renderLastEdit() {
   const el = document.getElementById('lastEditTime');
   if (el) {
-    el.textContent = state.lastEdit || 'Never';
+    el.textContent = DEVELOPER_LAST_EDIT;
   }
 }
 
@@ -994,43 +995,45 @@ function renderGanttChart(overrideWidth) {
   let currentY = headerHeight;
   const renderedRows = [];
 
-  // Always render General Tasks header to allow moving tasks out of projects
-  currentY += 10;
-  renderedRows.push({
-    y: currentY,
-    type: 'group-header',
-    label: 'General Tasks',
-    color: 'var(--text-tertiary)'
-  });
-  currentY += groupHeaderHeight;
-
-  // Deadline row for General Tasks (if any)
-  const generalDeadlines = filteredDeadlines.filter(d => (d.projectId || 'none') === 'none');
-  if (generalDeadlines.length > 0) {
-    const packing = packDeadlines(generalDeadlines, 13, dateToX);
+  if (state.ui.filterProjects.includes('none')) {
+    // Always render General Tasks header to allow moving tasks out of projects
+    currentY += 10;
     renderedRows.push({
       y: currentY,
-      type: 'deadline-row',
-      projectId: 'none',
-      deadlines: generalDeadlines,
-      color: 'var(--text-tertiary)',
-      lanes: packing.lanes,
-      laneHeight: packing.laneHeight,
-      rowHeight: packing.height
+      type: 'group-header',
+      label: 'General Tasks',
+      color: 'var(--text-tertiary)'
     });
-    currentY += packing.height;
-  }
-  
-  if (tasksByProject['none'] && tasksByProject['none'].length > 0) {
-    tasksByProject['none'].forEach(t => {
+    currentY += groupHeaderHeight;
+
+    // Deadline row for General Tasks (if any)
+    const generalDeadlines = filteredDeadlines.filter(d => (d.projectId || 'none') === 'none');
+    if (generalDeadlines.length > 0) {
+      const packing = packDeadlines(generalDeadlines, 13, dateToX);
       renderedRows.push({
         y: currentY,
-        type: 'task',
-        data: t,
-        color: 'var(--text-secondary)'
+        type: 'deadline-row',
+        projectId: 'none',
+        deadlines: generalDeadlines,
+        color: 'var(--text-tertiary)',
+        lanes: packing.lanes,
+        laneHeight: packing.laneHeight,
+        rowHeight: packing.height
       });
-      currentY += rowHeight;
-    });
+      currentY += packing.height;
+    }
+    
+    if (tasksByProject['none'] && tasksByProject['none'].length > 0) {
+      tasksByProject['none'].forEach(t => {
+        renderedRows.push({
+          y: currentY,
+          type: 'task',
+          data: t,
+          color: 'var(--text-secondary)'
+        });
+        currentY += rowHeight;
+      });
+    }
   }
 
   filteredProjects.forEach(p => {
@@ -4160,6 +4163,54 @@ function resetTimelineView() {
   renderGanttChart();
 }
 
+let lastScrollTime = 0;
+function scrollTimeline(dir) {
+  const now = Date.now();
+  if (now - lastScrollTime < 50) return; // throttle to max 20 scrolls per second
+  lastScrollTime = now;
+
+  const { viewportStartDate, zoomMonths } = state.ui;
+  if (!viewportStartDate) return;
+  const timelineStart = parseLocalDate(viewportStartDate);
+  const viewportWidth = (document.getElementById('chartViewport') && document.getElementById('chartViewport').clientWidth) || 1000;
+  
+  const timelineEnd = new Date(timelineStart.getTime());
+  timelineEnd.setMonth(timelineEnd.getMonth() + zoomMonths);
+  const totalDurationMs = timelineEnd.getTime() - timelineStart.getTime();
+
+  const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+  const weekWidth = (msPerWeek / totalDurationMs) * viewportWidth;
+  const monthWidth = viewportWidth / zoomMonths;
+
+  let unit = 'trimester';
+  if (weekWidth >= 30) {
+    unit = 'week';
+  } else if (monthWidth >= 75) {
+    unit = 'month';
+  }
+
+  const newTimelineStart = new Date(timelineStart.getTime());
+  if (unit === 'week') {
+    newTimelineStart.setDate(newTimelineStart.getDate() + dir * 7);
+  } else if (unit === 'month') {
+    newTimelineStart.setMonth(newTimelineStart.getMonth() + dir);
+  } else { // trimester
+    newTimelineStart.setMonth(newTimelineStart.getMonth() + dir * 3);
+  }
+
+  const { minVal, maxVal } = getTimelineDataBounds();
+  const scrollMin = minVal - 24;
+  const scrollMax = maxVal + 24;
+  const newVal = newTimelineStart.getFullYear() * 12 + newTimelineStart.getMonth();
+  
+  if (newVal >= scrollMin && newVal <= scrollMax) {
+    state.ui.viewportStartDate = formatDateToString(newTimelineStart);
+    saveState();
+    updateTimelineStartSlider();
+    renderGanttChart();
+  }
+}
+
 function formatMonthToString(year, month) {
   const m = String(month + 1).padStart(2, '0');
   return `${year}-${m}`;
@@ -4226,8 +4277,36 @@ window.addEventListener('DOMContentLoaded', () => {
     } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault();
       redo();
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      scrollTimeline(-1);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      scrollTimeline(1);
     }
   });
+
+  // Sidescroll wheel & Shift+scroll horizontal scroll handler on the Gantt viewport
+  const chartViewport = document.getElementById('chartViewport');
+  let accumulatedDeltaX = 0;
+  const DELTA_THRESHOLD = 50;
+  if (chartViewport) {
+    chartViewport.addEventListener('wheel', (e) => {
+      const dx = e.deltaX || (e.shiftKey ? e.deltaY : 0);
+      if (Math.abs(dx) > 0.5) {
+        e.preventDefault();
+        if ((dx > 0 && accumulatedDeltaX < 0) || (dx < 0 && accumulatedDeltaX > 0)) {
+          accumulatedDeltaX = 0;
+        }
+        accumulatedDeltaX += dx;
+        if (Math.abs(accumulatedDeltaX) >= DELTA_THRESHOLD) {
+          const dir = accumulatedDeltaX > 0 ? 1 : -1;
+          scrollTimeline(dir);
+          accumulatedDeltaX = 0;
+        }
+      }
+    }, { passive: false });
+  }
 
   // Re-fit and render Gantt chart dynamically when window width changes
   window.addEventListener('resize', () => {
