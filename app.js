@@ -2086,8 +2086,32 @@ function showTooltip(e, html) {
   
   // Calculate relative bounds
   const rect = viewport.getBoundingClientRect();
-  const x = e.clientX - rect.left + viewport.scrollLeft + 15;
-  const y = e.clientY - rect.top + viewport.scrollTop + 15;
+  const cursorX = e.clientX - rect.left + viewport.scrollLeft;
+  const cursorY = e.clientY - rect.top + viewport.scrollTop;
+  
+  let x = cursorX + 15;
+  let y = cursorY + 15;
+  
+  // Constrain horizontal position
+  if (x + tooltip.offsetWidth > viewport.scrollLeft + viewport.clientWidth) {
+    x = cursorX - tooltip.offsetWidth - 15;
+  }
+  x = Math.max(viewport.scrollLeft + 5, x);
+  
+  // Constrain vertical position
+  const headerHeight = 50; // Keep tooltip below sticky header
+  const minY = viewport.scrollTop + headerHeight + 5;
+  const maxY = viewport.scrollTop + viewport.clientHeight - tooltip.offsetHeight - 5;
+  
+  if (y + tooltip.offsetHeight > viewport.scrollTop + viewport.clientHeight) {
+    y = cursorY - tooltip.offsetHeight - 15;
+  }
+  
+  if (maxY >= minY) {
+    y = Math.max(minY, Math.min(maxY, y));
+  } else {
+    y = minY;
+  }
   
   tooltip.style.left = `${x}px`;
   tooltip.style.top = `${y}px`;
