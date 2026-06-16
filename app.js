@@ -2,7 +2,7 @@
 // STATE MANAGEMENT & DATA MODELS
 // ==========================================
 
-const DEVELOPER_LAST_EDIT = "2026-06-16 11:33";
+const DEVELOPER_LAST_EDIT = "2026-06-16 16:45";
 
 const PALETTE = [
   { name: 'Rose', class: 'proj-color-1', value: 'var(--proj-color-1)' },
@@ -604,6 +604,54 @@ function sortTasksWithLinkedAdjacent(tasks) {
   return result;
 }
 
+function resolveTaskSortOrders(projectTasks) {
+  const hasCustom = projectTasks.some(t => t.sortOrder !== undefined && t.sortOrder !== null);
+  if (!hasCustom) return;
+
+  const sorted = projectTasks
+    .filter(t => t.sortOrder !== undefined && t.sortOrder !== null)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const unsorted = projectTasks.filter(t => t.sortOrder === undefined || t.sortOrder === null);
+  if (unsorted.length === 0) return;
+
+  const chronological = sortTasksWithLinkedAdjacent(projectTasks);
+  const unsortedInChronologicalOrder = chronological.filter(t => t.sortOrder === undefined || t.sortOrder === null);
+
+  unsortedInChronologicalOrder.forEach(task => {
+    const idx = chronological.indexOf(task);
+    
+    let prevSorted = null;
+    let nextSorted = null;
+
+    for (let i = idx - 1; i >= 0; i--) {
+      const t = chronological[i];
+      if (t.sortOrder !== undefined && t.sortOrder !== null) {
+        prevSorted = t;
+        break;
+      }
+    }
+
+    for (let i = idx + 1; i < chronological.length; i++) {
+      const t = chronological[i];
+      if (t.sortOrder !== undefined && t.sortOrder !== null) {
+        nextSorted = t;
+        break;
+      }
+    }
+
+    if (prevSorted && nextSorted) {
+      task.sortOrder = (prevSorted.sortOrder + nextSorted.sortOrder) / 2;
+    } else if (prevSorted) {
+      task.sortOrder = prevSorted.sortOrder + 10;
+    } else if (nextSorted) {
+      task.sortOrder = nextSorted.sortOrder - 10;
+    } else {
+      task.sortOrder = 0;
+    }
+  });
+}
+
 // ==========================================
 // CASCADING SHIFTS & RECURRENCE MATH
 // ==========================================
@@ -947,7 +995,13 @@ function renderGanttChart(overrideWidth) {
         return 0;
       });
     } else {
-      tasksByProject[pId] = sortTasksWithLinkedAdjacent(tasksByProject[pId]);
+      resolveTaskSortOrders(tasksByProject[pId]);
+      const hasCustom = tasksByProject[pId].some(t => t.sortOrder !== undefined && t.sortOrder !== null);
+      if (hasCustom) {
+        tasksByProject[pId].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      } else {
+        tasksByProject[pId] = sortTasksWithLinkedAdjacent(tasksByProject[pId]);
+      }
     }
   });
   
@@ -1259,7 +1313,13 @@ function renderGanttChart(overrideWidth) {
     });
     
     Object.keys(tempTasksByProject).forEach(pId => {
-      tempTasksByProject[pId] = sortTasksWithLinkedAdjacent(tempTasksByProject[pId]);
+      resolveTaskSortOrders(tempTasksByProject[pId]);
+      const hasCustom = tempTasksByProject[pId].some(t => t.sortOrder !== undefined && t.sortOrder !== null);
+      if (hasCustom) {
+        tempTasksByProject[pId].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      } else {
+        tempTasksByProject[pId] = sortTasksWithLinkedAdjacent(tempTasksByProject[pId]);
+      }
       preDragOrder[pId] = tempTasksByProject[pId].map(t => t.id);
     });
     
@@ -1446,6 +1506,8 @@ function renderGanttChart(overrideWidth) {
           if (dragContext.dragMode === 'move') {
             const newProjId = dragContext.hoveredProjId;
             const oldProjId = dragContext.startProjectId;
+            
+            // Move project first if changed
             if (newProjId !== oldProjId) {
               const chainIds = getLinkedTaskChain(targetTask.id);
               chainIds.forEach(cid => {
@@ -1454,6 +1516,70 @@ function renderGanttChart(overrideWidth) {
                   t.projectId = newProjId;
                 }
               });
+            }
+
+            // Reordering logic
+            let finalClosestRow = null;
+            let finalMinDiff = Infinity;
+            const finalRelativeY = dragContext.mouseRelativeY;
+            
+            renderedRows.forEach(row => {
+              const rowHeightVal = row.type === 'group-header' ? groupHeaderHeight : row.type === 'deadline-row' ? row.rowHeight : rowHeight;
+              const rowCenter = row.y + rowHeightVal / 2;
+              const diff = Math.abs(finalRelativeY - rowCenter);
+              if (diff < finalMinDiff) {
+                finalMinDiff = diff;
+                finalClosestRow = row;
+              }
+            });
+            
+            if (finalClosestRow) {
+              const targetProjId = newProjId;
+              const orderIds = dragContext.preDragOrder[targetProjId] || [];
+              let projTasks = orderIds.map(id => state.tasks.find(x => x.id === id)).filter(Boolean);
+              
+              // Remove the target task if it is already present in target project list
+              projTasks = projTasks.filter(t => t.id !== targetTask.id);
+              
+              let insertIdx = -1;
+              if (finalClosestRow.type === 'task') {
+                const neighborTask = finalClosestRow.data;
+                const neighborIdx = projTasks.findIndex(t => t.id === neighborTask.id);
+                if (neighborIdx !== -1) {
+                  const neighborCenter = finalClosestRow.y + rowHeight / 2;
+                  if (finalRelativeY < neighborCenter) {
+                    insertIdx = neighborIdx;
+                  } else {
+                    insertIdx = neighborIdx + 1;
+                  }
+                }
+              } else if (finalClosestRow.type === 'group-header' || finalClosestRow.type === 'deadline-row') {
+                insertIdx = 0;
+              }
+              
+              if (insertIdx !== -1) {
+                projTasks.splice(insertIdx, 0, targetTask);
+              } else {
+                projTasks.push(targetTask);
+              }
+              
+              // Assign sequential sortOrder values
+              projTasks.forEach((t, index) => {
+                t.sortOrder = index * 10;
+              });
+
+              // If project changed, also re-index the old project tasks
+              if (newProjId !== oldProjId) {
+                const oldOrderIds = dragContext.preDragOrder[oldProjId] || [];
+                const oldProjTasks = oldOrderIds
+                  .map(id => state.tasks.find(x => x.id === id))
+                  .filter(Boolean)
+                  .filter(t => t.id !== targetTask.id);
+                
+                oldProjTasks.forEach((t, index) => {
+                  t.sortOrder = index * 10;
+                });
+              }
             }
           }
           
