@@ -171,6 +171,11 @@ let hasUnexportedChanges = false;
 
 function loadState() {
   loadPlaceholderData();
+  prevDataSnapshot = JSON.stringify({
+    projects: state.projects,
+    tasks: state.tasks,
+    deadlines: state.deadlines
+  });
 }
 
 function saveState(isDataModification = false) {
@@ -3706,6 +3711,17 @@ function processImportFile(file) {
       }
       
       saveState();
+      
+      // Reset undo/redo history after a successful importation
+      undoStack = [];
+      redoStack = [];
+      prevDataSnapshot = JSON.stringify({
+        projects: state.projects,
+        tasks: state.tasks,
+        deadlines: state.deadlines
+      });
+      updateUndoRedoButtons();
+      
       hasUnexportedChanges = false;
       
       // Re-initialize app rendering
