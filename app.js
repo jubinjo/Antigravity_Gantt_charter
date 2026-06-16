@@ -723,10 +723,14 @@ function isDeadlineVisible(deadline, timelineStart, timelineEnd) {
 
 function renderGanttChart(overrideWidth) {
   const svg = document.getElementById('ganttSvg');
+  const headerSvg = document.getElementById('ganttHeaderSvg');
   if (!svg) return 0;
   
   // Clear SVG first
   svg.innerHTML = '';
+  if (headerSvg) {
+    headerSvg.innerHTML = '';
+  }
   
   // 1. Calculate Viewport Start and Zoom width
   const { viewportStartDate, zoomMonths } = state.ui;
@@ -1048,6 +1052,10 @@ function renderGanttChart(overrideWidth) {
   // Set dimensions on SVG element (use viewportWidth to make it fit)
   svg.setAttribute('width', viewportWidth);
   svg.setAttribute('height', totalHeight);
+  if (headerSvg) {
+    headerSvg.setAttribute('width', viewportWidth);
+    headerSvg.setAttribute('height', headerHeight);
+  }
   
   // 2. Draw alternating swimlane background rects
   let isEvenRow = false;
@@ -1941,7 +1949,11 @@ function renderGanttChart(overrideWidth) {
   headerBg.setAttribute('width', viewportWidth);
   headerBg.setAttribute('height', headerHeight);
   headerBg.setAttribute('class', 'svg-header-bg');
-  svg.appendChild(headerBg);
+  if (headerSvg) {
+    headerSvg.appendChild(headerBg);
+  } else {
+    svg.appendChild(headerBg);
+  }
   
   // Draw minor labels
   columns.forEach(col => {
@@ -1950,7 +1962,11 @@ function renderGanttChart(overrideWidth) {
     minorText.setAttribute('y', headerHeight - 10);
     minorText.setAttribute('class', 'svg-header-text');
     minorText.textContent = col.minorLabel;
-    svg.appendChild(minorText);
+    if (headerSvg) {
+      headerSvg.appendChild(minorText);
+    } else {
+      svg.appendChild(minorText);
+    }
   });
 
   // Group columns into major label spans to prevent overlap and support sticky layout
@@ -2011,7 +2027,11 @@ function renderGanttChart(overrideWidth) {
       majorText.setAttribute('y', 20);
       majorText.setAttribute('class', 'svg-header-text-month');
       majorText.textContent = textContent;
-      svg.appendChild(majorText);
+      if (headerSvg) {
+        headerSvg.appendChild(majorText);
+      } else {
+        svg.appendChild(majorText);
+      }
     }
   });
 
@@ -2022,7 +2042,11 @@ function renderGanttChart(overrideWidth) {
   headerBorder.setAttribute('y2', headerHeight);
   headerBorder.setAttribute('stroke', 'var(--border-color)');
   headerBorder.setAttribute('stroke-width', '1.5');
-  svg.appendChild(headerBorder);
+  if (headerSvg) {
+    headerSvg.appendChild(headerBorder);
+  } else {
+    svg.appendChild(headerBorder);
+  }
 
   // 8. Draw Scroll Zone Indicators (hidden/low-opacity by default, light up on drag/hover)
   const leftIndicator = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
