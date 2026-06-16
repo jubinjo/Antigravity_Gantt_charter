@@ -2,7 +2,7 @@
 // STATE MANAGEMENT & DATA MODELS
 // ==========================================
 
-const DEVELOPER_LAST_EDIT = "2026-06-16 16:45";
+const DEVELOPER_LAST_EDIT = "2026-06-16 17:00";
 
 const PALETTE = [
   { name: 'Rose', class: 'proj-color-1', value: 'var(--proj-color-1)' },
@@ -26,7 +26,8 @@ let state = {
     viewportStartDate: '', // YYYY-MM-DD
     filterProjects: [],    // IDs of selected projects to show. Empty = all
     filterAssignees: [],   // Names of assignees to show. Empty = all
-    hideListPanel: false
+    hideListPanel: false,
+    hideSidebar: false
   }
 };
 
@@ -385,6 +386,7 @@ function loadPlaceholderData() {
   state.ui.filterProjects = ['none', 'proj-sleep', 'proj-trial'];
   state.ui.filterAssignees = ['Dr. Sarah Jenkins', 'Marcus Vance', 'Dr. Kenji Sato', 'Unassigned'];
   state.ui.hideListPanel = false;
+  state.ui.hideSidebar = false;
   
   saveState(true);
 }
@@ -3691,6 +3693,7 @@ function processImportFile(file) {
       if (!state.ui.theme) state.ui.theme = 'dark';
       if (!state.ui.zoomMonths) state.ui.zoomMonths = 12;
       if (state.ui.hideListPanel === undefined) state.ui.hideListPanel = false;
+      if (state.ui.hideSidebar === undefined) state.ui.hideSidebar = false;
       
       // Force migration/initialization for imported states to tick everything by default
       if (!state.ui.filterProjects || state.ui.filterProjects.length === 0) {
@@ -3898,6 +3901,52 @@ function toggleListPanel() {
   }
 }
 
+function toggleSidebar() {
+  const sidebar = document.querySelector('.sidebar');
+  if (!sidebar) return;
+  
+  const isCollapsed = sidebar.classList.toggle('collapsed');
+  state.ui.hideSidebar = isCollapsed;
+  saveState();
+  
+  const btn = document.getElementById('toggleSidebarBtn');
+  if (btn) {
+    btn.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  }
+  
+  // Re-fit and render Gantt chart dynamically because the layout changed width!
+  renderGanttChart();
+}
+
+function toggleFullWindow() {
+  const panel = document.querySelector('.visualization-panel');
+  const btn = document.getElementById('fullscreenChartBtn');
+  if (!panel || !btn) return;
+
+  const isFull = panel.classList.toggle('full-window');
+  
+  if (isFull) {
+    btn.title = 'Restore normal view';
+    btn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.25rem;">
+        <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M10 14l-7 7"/>
+      </svg>
+      <span>Restore</span>
+    `;
+  } else {
+    btn.title = 'Display chart over the whole window';
+    btn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.25rem;">
+        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+      </svg>
+      <span>Full Window</span>
+    `;
+  }
+  
+  // Re-render chart to fit the new width immediately
+  renderGanttChart();
+}
+
 function initializeTimelineControls() {
   const slider    = document.getElementById('timelineStartSlider');
   const valLabel  = document.getElementById('timelineStartValueLabel');
@@ -4045,6 +4094,26 @@ window.addEventListener('DOMContentLoaded', () => {
   if (toggleBtn) {
     toggleBtn.onclick = toggleListPanel;
   }
+
+  // Initialize sidebar collapsed state
+  const sidebar = document.querySelector('.sidebar');
+  const toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
+  if (sidebar && state.ui.hideSidebar) {
+    sidebar.classList.add('collapsed');
+    if (toggleSidebarBtn) {
+      toggleSidebarBtn.title = 'Expand sidebar';
+    }
+  }
+  if (toggleSidebarBtn) {
+    toggleSidebarBtn.onclick = toggleSidebar;
+  }
+  if (sidebar) {
+    sidebar.addEventListener('transitionend', (e) => {
+      if (e.propertyName === 'width') {
+        renderGanttChart();
+      }
+    });
+  }
   
   // Initial render
   renderGanttChart();
@@ -4097,6 +4166,11 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('resetTimelineBtn').onclick = resetTimelineView;
   document.getElementById('undoBtn').onclick = undo;
   document.getElementById('redoBtn').onclick = redo;
+  
+  const fullscreenBtn = document.getElementById('fullscreenChartBtn');
+  if (fullscreenBtn) {
+    fullscreenBtn.onclick = toggleFullWindow;
+  }
 
   // Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Y / Ctrl+Shift+Z = redo
   document.addEventListener('keydown', (e) => {
@@ -4115,6 +4189,12 @@ window.addEventListener('DOMContentLoaded', () => {
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
       scrollTimeline(1);
+    } else if (e.key === 'Escape') {
+      const panel = document.querySelector('.visualization-panel');
+      if (panel && panel.classList.contains('full-window')) {
+        e.preventDefault();
+        toggleFullWindow();
+      }
     }
   });
 

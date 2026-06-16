@@ -79,33 +79,44 @@
     <div class="main-content">
       <!-- Sidebar Filters and Actions -->
       <aside class="sidebar">
-        <div class="sidebar-section">
-          <h3>Add Elements</h3>
-          <button id="addProjectBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem;">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Add Project
-          </button>
-          <button id="addTaskBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem;">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Add Task
-          </button>
-          <button id="addDeadlineBtn" class="btn btn-primary" style="width: 100%;">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            Add Deadline
+        <div class="sidebar-header">
+          <h3>Filters & Actions</h3>
+          <button id="toggleSidebarBtn" class="btn btn-icon" title="Collapse sidebar">
+            <svg id="toggleSidebarIcon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"></polyline>
+            </svg>
           </button>
         </div>
 
-        <div class="sidebar-section">
-          <h3>Filter by Project</h3>
-          <div id="projectFiltersContainer" class="filter-list">
-            <!-- Dynamically populated project filter checkboxes -->
+        <div class="sidebar-content">
+          <div class="sidebar-section">
+            <h3>Add Elements</h3>
+            <button id="addProjectBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Add Project
+            </button>
+            <button id="addTaskBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 0.5rem;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Add Task
+            </button>
+            <button id="addDeadlineBtn" class="btn btn-primary" style="width: 100%;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Add Deadline
+            </button>
           </div>
-        </div>
 
-        <div class="sidebar-section">
-          <h3>Filter by Assignee</h3>
-          <div id="assigneeFiltersContainer" class="filter-list">
-            <!-- Dynamically populated assignee filter checkboxes -->
+          <div class="sidebar-section">
+            <h3>Filter by Project</h3>
+            <div id="projectFiltersContainer" class="filter-list">
+              <!-- Dynamically populated project filter checkboxes -->
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <h3>Filter by Assignee</h3>
+            <div id="assigneeFiltersContainer" class="filter-list">
+              <!-- Dynamically populated assignee filter checkboxes -->
+            </div>
           </div>
         </div>
       </aside>
@@ -134,6 +145,12 @@
             <span id="zoomValueText" style="font-size: 0.8125rem; font-weight: 500; min-width: 60px;">12 months</span>
             <button id="resetTimelineBtn" class="btn btn-primary" title="Reset timescale to 1 year, starting today" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.75rem; border-radius: var(--radius-sm);">
               Reset View
+            </button>
+            <button id="fullscreenChartBtn" class="btn btn-primary" title="Display chart over the whole window" style="margin-left: 0.5rem; padding: 0.25rem 0.5rem; font-size: 0.75rem; border-radius: var(--radius-sm);">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 0.25rem;">
+                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+              </svg>
+              <span>Full Window</span>
             </button>
           </div>
         </div>

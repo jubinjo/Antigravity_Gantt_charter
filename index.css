@@ -255,7 +255,7 @@ header {
 /* Layout main area */
 .main-content {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: auto 1fr;
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -263,6 +263,7 @@ header {
 
 /* Sidebar panel */
 .sidebar {
+  width: 280px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   padding: 1.5rem;
@@ -270,6 +271,8 @@ header {
   flex-direction: column;
   gap: 1.5rem;
   overflow-y: auto;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
 }
 
 .sidebar-section {
@@ -1275,4 +1278,90 @@ input[readonly], input:disabled, select:disabled {
   color: var(--text-tertiary);
 }
 
+/* Sidebar Header & Toggle styles */
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  height: 36px;
+  flex-shrink: 0;
+}
 
+.sidebar-header h3 {
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  margin-bottom: 0;
+}
+
+.sidebar-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Sidebar Collapsed State */
+.sidebar.collapsed {
+  width: 58px;
+  padding: 1.5rem 0.5rem;
+  align-items: center;
+  overflow-x: hidden;
+}
+
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  width: 100%;
+}
+
+.sidebar.collapsed .sidebar-header h3 {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-content {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  display: none;
+}
+
+#toggleSidebarIcon {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar.collapsed #toggleSidebarIcon {
+  transform: rotate(180deg);
+}
+
+/* Mobile Sidebar Collapsed State */
+@media (max-width: 768px) {
+  .sidebar.collapsed {
+    width: 100%;
+    height: 48px;
+    max-height: 48px;
+    padding: 0.5rem 1rem;
+    overflow-y: hidden;
+  }
+  
+  .sidebar.collapsed .sidebar-header {
+    justify-content: space-between;
+  }
+}
+
+/* Full Window Chart Mode */
+.visualization-panel.full-window {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 900;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.visualization-panel.full-window .list-panel {
+  display: none;
+}
