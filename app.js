@@ -2,7 +2,7 @@
 // STATE MANAGEMENT & DATA MODELS
 // ==========================================
 
-const DEVELOPER_LAST_EDIT = "2026-06-14 15:45";
+const DEVELOPER_LAST_EDIT = "2026-06-16 11:33";
 
 const PALETTE = [
   { name: 'Rose', class: 'proj-color-1', value: 'var(--proj-color-1)' },
@@ -167,69 +167,9 @@ let prevDataSnapshot = null; // snapshot of data state before last modification
 // STORAGE & DEFAULT PLACEHOLDERS
 // ==========================================
 
-const STORAGE_KEY = 'Antigravity_Gantt_State';
+let hasUnexportedChanges = false;
 
 function loadState() {
-  const data = localStorage.getItem(STORAGE_KEY);
-  if (data) {
-    try {
-      state = JSON.parse(data);
-      // Ensure UI defaults
-      if (!state.ui) state.ui = {};
-      if (!state.ui.theme) state.ui.theme = 'dark';
-      if (!state.ui.zoomMonths) state.ui.zoomMonths = 12;
-      if (state.ui.hideListPanel === undefined) state.ui.hideListPanel = false;
-      
-      // Migrate from viewportStartMonth to viewportStartDate
-      if (state.ui.viewportStartMonth && !state.ui.viewportStartDate) {
-        state.ui.viewportStartDate = state.ui.viewportStartMonth + '-01';
-      }
-      
-      // Migrate/populate filter list to tick everything by default
-      if (!state.ui.filterProjects || state.ui.filterProjects.length === 0) {
-        state.ui.filterProjects = ['none', ...state.projects.map(p => p.id)];
-      }
-      if (!state.ui.filterAssignees || state.ui.filterAssignees.length === 0) {
-        const assignees = new Set();
-        let hasUnassigned = false;
-        state.tasks.forEach(t => {
-          if (t.assignee && t.assignee.trim()) {
-            t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => assignees.add(a));
-          } else {
-            hasUnassigned = true;
-          }
-        });
-        state.ui.filterAssignees = Array.from(assignees);
-        if (hasUnassigned) state.ui.filterAssignees.push('Unassigned');
-      }
-      
-      // Migrate deadlines from task association to project association
-      if (state.deadlines) {
-        let stateChanged = false;
-        state.deadlines.forEach(d => {
-          if (d.taskId && !d.projectId) {
-            const task = state.tasks.find(t => t.id === d.taskId);
-            d.projectId = task ? (task.projectId || 'none') : 'none';
-            delete d.taskId;
-            stateChanged = true;
-          }
-        });
-        if (stateChanged) {
-          saveState();
-        }
-      }
-
-      // Initialise undo snapshot from loaded data
-      prevDataSnapshot = JSON.stringify({
-        projects: state.projects,
-        tasks: state.tasks,
-        deadlines: state.deadlines
-      });
-      return;
-    } catch (e) {
-      console.error("Error loading state from localStorage, using defaults", e);
-    }
-  }
   loadPlaceholderData();
 }
 
@@ -241,8 +181,8 @@ function saveState(isDataModification = false) {
       if (undoStack.length > MAX_UNDO_HISTORY) undoStack.shift();
       redoStack = []; // new action clears redo
     }
+    hasUnexportedChanges = true;
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   renderLastEdit();
   if (isDataModification) {
     // Update snapshot to current (post-modification) state
@@ -278,7 +218,7 @@ function undo() {
   state.tasks = prev.tasks;
   state.deadlines = prev.deadlines;
   prevDataSnapshot = JSON.stringify(prev);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  hasUnexportedChanges = true;
   renderLastEdit();
   updateUndoRedoButtons();
   syncDropdowns();
@@ -296,7 +236,7 @@ function redo() {
   state.tasks = next.tasks;
   state.deadlines = next.deadlines;
   prevDataSnapshot = JSON.stringify(next);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  hasUnexportedChanges = true;
   renderLastEdit();
   updateUndoRedoButtons();
   syncDropdowns();
@@ -311,14 +251,14 @@ function loadPlaceholderData() {
   state.projects = [
     {
       id: 'proj-sleep',
-      name: 'Longitudinal Sleep Study',
+      name: '[Example] Longitudinal Sleep Study',
       colorIndex: 5, // Blue
       startMonth: `${currentYear}-06`,
       endMonth: `${currentYear + 2}-12`
     },
     {
       id: 'proj-trial',
-      name: 'Clinical Trials Cohort A',
+      name: '[Example] Clinical Trials Cohort A',
       colorIndex: 0, // Rose
       startMonth: `${currentYear}-08`,
       endMonth: `${currentYear + 1}-10`
@@ -329,7 +269,7 @@ function loadPlaceholderData() {
     {
       id: 'task-lit',
       projectId: 'proj-sleep',
-      name: 'Literature Review & Protocol Draft',
+      name: 'Literature Review & Protocol Draft [Example]',
       startDate: `${currentYear}-06-01`,
       startAfterTaskId: null,
       startType: 'date',
@@ -341,7 +281,7 @@ function loadPlaceholderData() {
     {
       id: 'task-irb',
       projectId: 'proj-sleep',
-      name: 'IRB & Ethics Approval Submission',
+      name: 'IRB & Ethics Approval Submission [Example]',
       startDate: `${currentYear}-08-24`, // Starts after lit review ends
       startAfterTaskId: 'task-lit',
       startType: 'dependency',
@@ -353,7 +293,7 @@ function loadPlaceholderData() {
     {
       id: 'task-screen',
       projectId: 'proj-sleep',
-      name: 'Cohort Recruitment & Screening',
+      name: 'Cohort Recruitment & Screening [Example]',
       startDate: `${currentYear}-10-01`,
       startAfterTaskId: null,
       startType: 'date',
@@ -365,7 +305,7 @@ function loadPlaceholderData() {
     {
       id: 'task-site',
       projectId: 'proj-trial',
-      name: 'Site Setup & Equipment Calibration',
+      name: 'Site Setup & Equipment Calibration [Example]',
       startDate: `${currentYear}-08-01`,
       startAfterTaskId: null,
       startType: 'date',
@@ -377,7 +317,7 @@ function loadPlaceholderData() {
     {
       id: 'task-dose',
       projectId: 'proj-trial',
-      name: 'Cohort A Dose Testing Phase',
+      name: 'Cohort A Dose Testing Phase [Example]',
       startDate: `${currentYear}-09-12`,
       startAfterTaskId: 'task-site',
       startType: 'dependency',
@@ -395,7 +335,7 @@ function loadPlaceholderData() {
   state.tasks.push({
     id: 'task-assess-y2',
     projectId: 'proj-sleep',
-    name: 'Annual Cohort Assessment (Year 2)',
+    name: 'Annual Cohort Assessment (Year 2) [Example]',
     startDate: formatDateToString(week5Y2),
     startAfterTaskId: null,
     startType: 'date',
@@ -410,7 +350,7 @@ function loadPlaceholderData() {
   state.tasks.push({
     id: 'task-assess-y3',
     projectId: 'proj-sleep',
-    name: 'Annual Cohort Assessment (Year 3)',
+    name: 'Annual Cohort Assessment (Year 3) [Example]',
     startDate: formatDateToString(week5Y3),
     startAfterTaskId: null,
     startType: 'date',
@@ -424,13 +364,13 @@ function loadPlaceholderData() {
     {
       id: 'dead-irb-meet',
       projectId: 'proj-sleep',
-      name: 'IRB Review Meeting',
+      name: 'IRB Review Meeting [Example]',
       date: `${currentYear}-10-15`
     },
     {
       id: 'dead-midterm',
       projectId: 'proj-trial',
-      name: 'Midterm Safety Review',
+      name: 'Midterm Safety Review [Example]',
       date: `${currentYear}-11-20`
     }
   ];
@@ -756,6 +696,27 @@ function createRecurrentCopies(baseTask, project) {
   }
 }
 
+function isTaskVisibleInTimeline(task, timelineStart, timelineEnd) {
+  // If the task is currently being dragged, always keep it visible
+  if (dragContext && dragContext.taskId === task.id) {
+    return true;
+  }
+  const years = getTaskIterationYears(task);
+  return years.some(y => {
+    const occ = getTaskOccurrenceDates(task, y);
+    const start = parseLocalDate(occ.startDate);
+    const end = parseLocalDate(occ.endDate);
+    return start <= timelineEnd && end >= timelineStart;
+  });
+}
+
+function isDeadlineVisible(deadline, timelineStart, timelineEnd) {
+  const dDate = parseLocalDate(deadline.date);
+  return dDate >= timelineStart && dDate <= timelineEnd;
+}
+
+
+
 // ==========================================
 // RENDERING THE SVG GANTT CHART
 // ==========================================
@@ -996,7 +957,9 @@ function renderGanttChart(overrideWidth) {
   const renderedRows = [];
 
   if (state.ui.filterProjects.includes('none')) {
-    // Always render General Tasks header to allow moving tasks out of projects
+    const generalTasks = tasksByProject['none'] || [];
+    const generalDeadlines = filteredDeadlines.filter(d => (d.projectId || 'none') === 'none');
+
     currentY += 10;
     renderedRows.push({
       y: currentY,
@@ -1007,14 +970,14 @@ function renderGanttChart(overrideWidth) {
     currentY += groupHeaderHeight;
 
     // Deadline row for General Tasks (if any)
-    const generalDeadlines = filteredDeadlines.filter(d => (d.projectId || 'none') === 'none');
-    if (generalDeadlines.length > 0) {
-      const packing = packDeadlines(generalDeadlines, 13, dateToX);
+    const visibleGeneralDeadlines = generalDeadlines.filter(d => isDeadlineVisible(d, timelineStart, timelineEnd));
+    if (visibleGeneralDeadlines.length > 0) {
+      const packing = packDeadlines(visibleGeneralDeadlines, 13, dateToX);
       renderedRows.push({
         y: currentY,
         type: 'deadline-row',
         projectId: 'none',
-        deadlines: generalDeadlines,
+        deadlines: visibleGeneralDeadlines,
         color: 'var(--text-tertiary)',
         lanes: packing.lanes,
         laneHeight: packing.laneHeight,
@@ -1023,8 +986,8 @@ function renderGanttChart(overrideWidth) {
       currentY += packing.height;
     }
     
-    if (tasksByProject['none'] && tasksByProject['none'].length > 0) {
-      tasksByProject['none'].forEach(t => {
+    generalTasks.forEach(t => {
+      if (isTaskVisibleInTimeline(t, timelineStart, timelineEnd)) {
         renderedRows.push({
           y: currentY,
           type: 'task',
@@ -1032,12 +995,14 @@ function renderGanttChart(overrideWidth) {
           color: 'var(--text-secondary)'
         });
         currentY += rowHeight;
-      });
-    }
+      }
+    });
   }
 
   filteredProjects.forEach(p => {
     const projTasks = tasksByProject[p.id] || [];
+    const projDeadlines = filteredDeadlines.filter(d => d.projectId === p.id);
+
     currentY += 10;
     const pColor = PALETTE[p.colorIndex] || PALETTE[8];
     renderedRows.push({
@@ -1050,14 +1015,14 @@ function renderGanttChart(overrideWidth) {
     currentY += groupHeaderHeight;
 
     // Deadline row for this project (if any)
-    const projDeadlines = filteredDeadlines.filter(d => d.projectId === p.id);
-    if (projDeadlines.length > 0) {
-      const packing = packDeadlines(projDeadlines, 13, dateToX);
+    const visibleProjDeadlines = projDeadlines.filter(d => isDeadlineVisible(d, timelineStart, timelineEnd));
+    if (visibleProjDeadlines.length > 0) {
+      const packing = packDeadlines(visibleProjDeadlines, 13, dateToX);
       renderedRows.push({
         y: currentY,
         type: 'deadline-row',
         projectId: p.id,
-        deadlines: projDeadlines,
+        deadlines: visibleProjDeadlines,
         color: pColor.value,
         lanes: packing.lanes,
         laneHeight: packing.laneHeight,
@@ -1065,15 +1030,16 @@ function renderGanttChart(overrideWidth) {
       });
       currentY += packing.height;
     }
-    
     projTasks.forEach(t => {
-      renderedRows.push({
-        y: currentY,
-        type: 'task',
-        data: t,
-        color: pColor.value
-      });
-      currentY += rowHeight;
+      if (isTaskVisibleInTimeline(t, timelineStart, timelineEnd)) {
+        renderedRows.push({
+          y: currentY,
+          type: 'task',
+          data: t,
+          color: pColor.value
+        });
+        currentY += rowHeight;
+      }
     });
   });
   
@@ -2404,370 +2370,7 @@ function closeModal(modalId) {
   }
 }
 
-// ==========================================
-// SAVE CHART IMAGE / PDF EXPORT
-// ==========================================
 
-function saveImage() {
-  document.getElementById('saveImageFilename').value = 'gantt-chart';
-  document.getElementById('saveImageFormat').value = 'png';
-  document.getElementById('saveImageTheme').value = 'current';
-  document.getElementById('saveImageScope').value = 'current';
-  document.getElementById('saveImagePreset').value = '16-9';
-  
-  applyImageSizePreset();
-  openModal('saveImageModal');
-}
-
-function applyImageSizePreset() {
-  const preset = document.getElementById('saveImagePreset').value;
-  const widthInput = document.getElementById('saveImageWidth');
-  const heightInput = document.getElementById('saveImageHeight');
-  
-  if (preset === 'custom') {
-    widthInput.disabled = false;
-    widthInput.readOnly = false;
-    if (!widthInput.value || widthInput.value === '1500' || widthInput.value === '640') {
-      widthInput.value = '1200';
-    }
-    
-    heightInput.disabled = false;
-    heightInput.readOnly = false;
-    heightInput.placeholder = 'Height in px';
-    if (heightInput.value === 'Auto' || !heightInput.value) {
-      const currentSvg = document.getElementById('ganttSvg');
-      heightInput.value = currentSvg ? currentSvg.getAttribute('height') || '800' : '800';
-    }
-  } else {
-    // Presets lock height to auto
-    heightInput.disabled = true;
-    heightInput.readOnly = true;
-    heightInput.value = 'Auto';
-    heightInput.placeholder = 'Auto';
-    
-    if (preset === '16-9') {
-      widthInput.value = '1500';
-      widthInput.disabled = true;
-      widthInput.readOnly = true;
-    } else if (preset === 'a4') {
-      widthInput.value = '640';
-      widthInput.disabled = true;
-      widthInput.readOnly = true;
-    } else if (preset === 'autofit') {
-      const viewport = document.getElementById('chartViewport');
-      widthInput.value = viewport ? String(viewport.clientWidth || 1200) : '1200';
-      widthInput.disabled = true;
-      widthInput.readOnly = true;
-    }
-  }
-}
-
-function getStylesheetsAsText() {
-  let styleText = '';
-  try {
-    for (const sheet of document.styleSheets) {
-      try {
-        const rules = sheet.cssRules || sheet.rules;
-        if (rules) {
-          for (const rule of rules) {
-            styleText += rule.cssText + '\n';
-          }
-        }
-      } catch (innerErr) {
-        console.warn('Could not read style rules for stylesheet:', sheet.href, innerErr);
-      }
-    }
-  } catch (e) {
-    console.warn('Error reading stylesheets:', e);
-  }
-  return styleText;
-}
-
-function triggerDownload(url, filename) {
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-function handleSaveImageSubmit(event) {
-  event.preventDefault();
-  
-  const filename = document.getElementById('saveImageFilename').value.trim() || 'gantt-chart';
-  const format = document.getElementById('saveImageFormat').value;
-  const theme = document.getElementById('saveImageTheme').value;
-  const scope = document.getElementById('saveImageScope').value;
-  const preset = document.getElementById('saveImagePreset').value;
-  const width = parseInt(document.getElementById('saveImageWidth').value, 10) || 1200;
-  const heightVal = document.getElementById('saveImageHeight').value;
-  const customHeight = (preset === 'custom' && heightVal !== 'Auto') ? (parseInt(heightVal, 10) || 800) : null;
-
-  // 1. Snapshot current visual state
-  const originalTheme = state.ui.theme;
-  const originalZoomMonths = state.ui.zoomMonths;
-  const originalViewportStartDate = state.ui.viewportStartDate;
-  const originalFilterProjects = [...state.ui.filterProjects];
-  const originalFilterAssignees = [...state.ui.filterAssignees];
-
-  // 2. Adjust state for Scope
-  if (scope === 'all') {
-    let earliest = null;
-    let latest = null;
-
-    state.projects.forEach(p => {
-      if (p.startMonth) {
-        const d = parseLocalDate(p.startMonth + '-01');
-        if (!earliest || d < earliest) earliest = d;
-      }
-      if (p.endMonth) {
-        const d = parseLocalDate(p.endMonth + '-01');
-        const dEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-        if (!latest || dEnd > latest) latest = dEnd;
-      }
-    });
-
-    state.tasks.forEach(t => {
-      if (t.startDate) {
-        const d = parseLocalDate(t.startDate);
-        if (!earliest || d < earliest) earliest = d;
-      }
-      if (t.endDate) {
-        const d = parseLocalDate(t.endDate);
-        if (!latest || d > latest) latest = d;
-      }
-    });
-
-    state.deadlines.forEach(dl => {
-      if (dl.date) {
-        const d = parseLocalDate(dl.date);
-        if (!earliest || d < earliest) earliest = d;
-        if (!latest || d > latest) latest = d;
-      }
-    });
-
-    if (!earliest || !latest) {
-      const today = new Date();
-      earliest = new Date(today.getFullYear(), today.getMonth(), 1);
-      latest = new Date(today.getFullYear(), today.getMonth() + 12, 0);
-    } else {
-      earliest = new Date(earliest.getFullYear(), earliest.getMonth(), 1);
-      latest = new Date(latest.getFullYear(), latest.getMonth() + 1, 0);
-    }
-
-    state.ui.viewportStartDate = formatDateToString(earliest);
-    const diffMonths = (latest.getFullYear() - earliest.getFullYear()) * 12 + (latest.getMonth() - earliest.getMonth()) + 1;
-    state.ui.zoomMonths = Math.max(1, diffMonths);
-
-    // Disable all filters for exporting the entire chart
-    state.ui.filterProjects = ['none', ...state.projects.map(p => p.id)];
-    
-    const allAssignees = new Set();
-    let hasUnassigned = false;
-    state.tasks.forEach(t => {
-      if (t.assignee && t.assignee.trim()) {
-        allAssignees.add(t.assignee.trim());
-      } else {
-        hasUnassigned = true;
-      }
-    });
-    state.ui.filterAssignees = Array.from(allAssignees);
-    if (hasUnassigned) state.ui.filterAssignees.push('Unassigned');
-  }
-
-  // 3. Set temporary theme
-  const targetTheme = theme === 'current' ? originalTheme : theme;
-  document.documentElement.setAttribute('data-theme', targetTheme);
-
-  // 4. Force render synchronously at target width to get the correct auto-calculated height
-  const computedHeight = renderGanttChart(width);
-  const finalHeight = customHeight !== null ? customHeight : computedHeight;
-
-  // 5. Clone SVG element and style it
-  const originalSvg = document.getElementById('ganttSvg');
-  const clonedSvg = originalSvg.cloneNode(true);
-
-  // Clean interactive helper elements from clone
-  const leftScroll = clonedSvg.getElementById('leftScrollZone');
-  if (leftScroll) leftScroll.remove();
-  const rightScroll = clonedSvg.getElementById('rightScrollZone');
-  if (rightScroll) rightScroll.remove();
-
-  const actionGroups = clonedSvg.querySelectorAll('.task-actions-group');
-  actionGroups.forEach(g => g.remove());
-
-  const projActionBtns = clonedSvg.querySelectorAll('.svg-proj-action-btn');
-  projActionBtns.forEach(b => b.remove());
-
-  // Set export size on cloned SVG
-  clonedSvg.setAttribute('width', width);
-  clonedSvg.setAttribute('height', finalHeight);
-  clonedSvg.setAttribute('viewBox', `0 0 ${width} ${finalHeight}`);
-
-  // Fetch computed CSS variables for the target theme
-  const computedStyles = getComputedStyle(document.documentElement);
-  
-  // Create variables stylesheet string
-  const variablesCSS = `
-    :root, svg {
-      --bg-primary: ${computedStyles.getPropertyValue('--bg-primary').trim()};
-      --bg-secondary: ${computedStyles.getPropertyValue('--bg-secondary').trim()};
-      --bg-tertiary: ${computedStyles.getPropertyValue('--bg-tertiary').trim()};
-      --bg-glass: ${computedStyles.getPropertyValue('--bg-glass').trim()};
-      --border-color: ${computedStyles.getPropertyValue('--border-color').trim()};
-      --border-hover: ${computedStyles.getPropertyValue('--border-hover').trim()};
-      --text-primary: ${computedStyles.getPropertyValue('--text-primary').trim()};
-      --text-secondary: ${computedStyles.getPropertyValue('--text-secondary').trim()};
-      --text-tertiary: ${computedStyles.getPropertyValue('--text-tertiary').trim()};
-      --accent: ${computedStyles.getPropertyValue('--accent').trim()};
-      --accent-hover: ${computedStyles.getPropertyValue('--accent-hover').trim()};
-      --accent-light: ${computedStyles.getPropertyValue('--accent-light').trim()};
-      --danger: ${computedStyles.getPropertyValue('--danger').trim()};
-      --danger-hover: ${computedStyles.getPropertyValue('--danger-hover').trim()};
-      --danger-light: ${computedStyles.getPropertyValue('--danger-light').trim()};
-      --warning: ${computedStyles.getPropertyValue('--warning').trim()};
-      --grid-line: ${computedStyles.getPropertyValue('--grid-line').trim()};
-      --grid-line-major: ${computedStyles.getPropertyValue('--grid-line-major').trim()};
-      --grid-bg-weekend: ${computedStyles.getPropertyValue('--grid-bg-weekend').trim()};
-      --timeline-header-bg: ${computedStyles.getPropertyValue('--timeline-header-bg').trim()};
-      --radius-sm: ${computedStyles.getPropertyValue('--radius-sm').trim()};
-      --radius-md: ${computedStyles.getPropertyValue('--radius-md').trim()};
-      --radius-lg: ${computedStyles.getPropertyValue('--radius-lg').trim()};
-      --radius-full: ${computedStyles.getPropertyValue('--radius-full').trim()};
-      --proj-color-1: ${computedStyles.getPropertyValue('--proj-color-1').trim()};
-      --proj-color-2: ${computedStyles.getPropertyValue('--proj-color-2').trim()};
-      --proj-color-3: ${computedStyles.getPropertyValue('--proj-color-3').trim()};
-      --proj-color-4: ${computedStyles.getPropertyValue('--proj-color-4').trim()};
-      --proj-color-5: ${computedStyles.getPropertyValue('--proj-color-5').trim()};
-      --proj-color-6: ${computedStyles.getPropertyValue('--proj-color-6').trim()};
-      --proj-color-7: ${computedStyles.getPropertyValue('--proj-color-7').trim()};
-      --proj-color-8: ${computedStyles.getPropertyValue('--proj-color-8').trim()};
-      --proj-color-9: ${computedStyles.getPropertyValue('--proj-color-9').trim()};
-    }
-  `;
-
-  const stylesheetsCSS = getStylesheetsAsText();
-
-  // Create style element inside cloned SVG
-  const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style');
-  styleEl.textContent = variablesCSS + '\n' + stylesheetsCSS;
-  clonedSvg.insertBefore(styleEl, clonedSvg.firstChild);
-
-  // 6. Restore original state and theme immediately
-  state.ui.viewportStartDate = originalViewportStartDate;
-  state.ui.zoomMonths = originalZoomMonths;
-  state.ui.filterProjects = originalFilterProjects;
-  state.ui.filterAssignees = originalFilterAssignees;
-  applyTheme(); // restores the original data-theme attribute
-  renderGanttChart(); // restores the original SVG dimensions and contents in the UI
-  
-  closeModal('saveImageModal');
-
-  // 7. Serialize SVG content
-  const xmlSerializer = new XMLSerializer();
-  let svgString = xmlSerializer.serializeToString(clonedSvg);
-  if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
-    svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
-  }
-
-  // 8. Perform export according to format
-  if (format === 'svg') {
-    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
-    const downloadUrl = URL.createObjectURL(blob);
-    triggerDownload(downloadUrl, `${filename}.svg`);
-    setTimeout(() => URL.revokeObjectURL(downloadUrl), 100);
-  } else if (format === 'png') {
-    const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = function() {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = finalHeight;
-      const ctx = canvas.getContext('2d');
-      
-      // Draw background filled with target theme background color
-      ctx.fillStyle = computedStyles.getPropertyValue('--bg-primary').trim() || '#090d16';
-      ctx.fillRect(0, 0, width, finalHeight);
-      
-      // Draw SVG onto canvas
-      ctx.drawImage(img, 0, 0);
-      
-      // Convert to PNG data URL and trigger download
-      try {
-        const pngUrl = canvas.toDataURL('image/png');
-        triggerDownload(pngUrl, `${filename}.png`);
-      } catch (err) {
-        console.error('Canvas conversion error:', err);
-        alert('PNG export failed. Please try saving as SVG or PDF.');
-      }
-      URL.revokeObjectURL(url);
-    };
-    img.onerror = function(e) {
-      console.error('Failed to load image for canvas painting', e);
-      URL.revokeObjectURL(url);
-      alert('Failed to generate PNG image.');
-    };
-    img.src = url;
-  } else if (format === 'pdf') {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      alert('Please allow popups to save as PDF.');
-      return;
-    }
-    const pdfBgColor = computedStyles.getPropertyValue('--bg-primary').trim() || '#090d16';
-    
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>${filename}</title>
-        <style>
-          html, body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            background-color: ${pdfBgColor};
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-          }
-          svg {
-            width: 100%;
-            max-height: 100%;
-            display: block;
-          }
-          @media print {
-            html, body {
-              background-color: ${pdfBgColor};
-              -webkit-print-color-adjust: exact;
-              print-color-adjust: exact;
-            }
-            @page {
-              size: A4 portrait;
-              margin: 10mm;
-            }
-          }
-        </style>
-      </head>
-      <body>
-        ${svgString}
-        <script>
-          window.onload = function() {
-            setTimeout(function() {
-              window.print();
-              window.close();
-            }, 250);
-          };
-        <\/script>
-      </body>
-      </html>
-    `);
-    printWindow.document.close();
-  }
-}
 
 // Reset standard confirmation dialog values
 let confirmCallback = null;
@@ -3875,14 +3478,21 @@ function exportData() {
   // Clean up
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+  hasUnexportedChanges = false;
 }
 
 function triggerImport() {
-  document.getElementById('fileImporter').click();
+  showConfirmationModal(
+    'Confirm Overwrite', 
+    'Importing data will overwrite your current workspace. Do you wish to continue?', 
+    false, 
+    () => {
+      openModal('importModal');
+    }
+  );
 }
 
-function handleImportFile(e) {
-  const file = e.target.files[0];
+function processImportFile(file) {
   if (!file) return;
   
   const reader = new FileReader();
@@ -3896,53 +3506,55 @@ function handleImportFile(e) {
         return;
       }
       
-      showConfirmationModal(
-        'Confirm Overwrite', 
-        'Importing data will overwrite your current workspace. Do you wish to continue?', 
-        false, 
-        () => {
-          state = parsed;
-          // Clean UI defaults if they were missing
-          if (!state.ui) state.ui = {};
-          if (!state.ui.theme) state.ui.theme = 'dark';
-          if (!state.ui.zoomMonths) state.ui.zoomMonths = 12;
-          if (state.ui.hideListPanel === undefined) state.ui.hideListPanel = false;
-          
-          // Force migration/initialization for imported states to tick everything by default
-          if (!state.ui.filterProjects || state.ui.filterProjects.length === 0) {
-            state.ui.filterProjects = ['none', ...state.projects.map(p => p.id)];
+      state = parsed;
+      // Clean UI defaults if they were missing
+      if (!state.ui) state.ui = {};
+      if (!state.ui.theme) state.ui.theme = 'dark';
+      if (!state.ui.zoomMonths) state.ui.zoomMonths = 12;
+      if (state.ui.hideListPanel === undefined) state.ui.hideListPanel = false;
+      
+      // Force migration/initialization for imported states to tick everything by default
+      if (!state.ui.filterProjects || state.ui.filterProjects.length === 0) {
+        state.ui.filterProjects = ['none', ...state.projects.map(p => p.id)];
+      }
+      if (!state.ui.filterAssignees || state.ui.filterAssignees.length === 0) {
+        const assignees = new Set();
+        let hasUnassigned = false;
+        state.tasks.forEach(t => {
+          if (t.assignee && t.assignee.trim()) {
+            t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => assignees.add(a));
+          } else {
+            hasUnassigned = true;
           }
-          if (!state.ui.filterAssignees || state.ui.filterAssignees.length === 0) {
-            const assignees = new Set();
-            let hasUnassigned = false;
-            state.tasks.forEach(t => {
-              if (t.assignee && t.assignee.trim()) {
-                t.assignee.split(',').map(a => a.trim()).filter(Boolean).forEach(a => assignees.add(a));
-              } else {
-                hasUnassigned = true;
-              }
-            });
-            state.ui.filterAssignees = Array.from(assignees);
-            if (hasUnassigned) state.ui.filterAssignees.push('Unassigned');
-          }
-          
-          saveState();
-          
-          // Re-initialize app rendering
-          applyTheme();
-          syncDropdowns();
-          populateSidebarFilters();
-          initializeTimelineControls();
-          renderGanttChart();
-          renderDataTable();
-        }
-      );
+        });
+        state.ui.filterAssignees = Array.from(assignees);
+        if (hasUnassigned) state.ui.filterAssignees.push('Unassigned');
+      }
+      
+      saveState();
+      hasUnexportedChanges = false;
+      
+      // Re-initialize app rendering
+      applyTheme();
+      syncDropdowns();
+      populateSidebarFilters();
+      initializeTimelineControls();
+      renderGanttChart();
+      renderDataTable();
+      
+      // Close the import modal on success
+      closeModal('importModal');
       
     } catch(err) {
       alert("Failed to parse JSON file: " + err.message);
     }
   };
   reader.readAsText(file);
+}
+
+function handleImportFile(e) {
+  const file = e.target.files[0];
+  processImportFile(file);
 }
 
 function handleResetAll() {
@@ -4255,9 +3867,39 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('exportDataBtn').onclick = exportData;
   document.getElementById('resetAllBtn').onclick = handleResetAll;
   
-  document.getElementById('saveImageBtn').onclick = saveImage;
-  document.getElementById('saveImagePreset').onchange = applyImageSizePreset;
-  document.getElementById('saveImageForm').onsubmit = handleSaveImageSubmit;
+  // Wire up dropzone drag and drop handlers
+  const dropzone = document.getElementById('importDropzone');
+  if (dropzone) {
+    dropzone.onclick = () => {
+      document.getElementById('fileImporter').click();
+    };
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('dragover');
+      }, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('dragover');
+      }, false);
+    });
+    
+    dropzone.addEventListener('drop', (e) => {
+      const dt = e.dataTransfer;
+      const files = dt.files;
+      if (files && files.length > 0) {
+        processImportFile(files[0]);
+      }
+    }, false);
+  }
+  
+
   
   document.getElementById('addProjectBtn').onclick = addProject;
   document.getElementById('addTaskBtn').onclick = addTask;
@@ -4312,4 +3954,13 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', () => {
     renderGanttChart();
   });
+});
+
+// Warn user on page close if there are unsaved changes
+window.addEventListener('beforeunload', (e) => {
+  if (hasUnexportedChanges) {
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
 });

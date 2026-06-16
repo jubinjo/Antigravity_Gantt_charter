@@ -11,7 +11,7 @@
 
 Antigravity Gantt Charter is a fully **offline, browser-based** Gantt chart tool designed for research project planning. No installation, no server, no account — just open the page and start planning.
 
-All data is stored locally in your browser (localStorage), so your work is private and persists across sessions.
+To maximize privacy and security, **this application does not use cookies, local storage, or server connections**. All data is stored purely in-memory in your active browser tab. Use the **Export** button to download your work as a JSON file, and **Import** to load it back in.
 
 ---
 
@@ -24,8 +24,7 @@ All data is stored locally in your browser (localStorage), so your work is priva
 - 🔍 **Filters** — Filter the chart and list by project and/or assignee
 - 🔎 **Zoom & pan** — Adjustable timeline zoom (4 months → 3 years) and scrollable start date
 - 🌙 **Dark / Light theme** — Toggle at any time
-- 📤 **Import / Export** — Save and load your data as JSON
-- 🖼️ **Save image** — Export the chart as PNG, SVG, or PDF (Beta)
+- 📤 **Import / Export** — Save and load your data as JSON (essential for saving work since data is in-memory only)
 - ↩️ **Undo / Redo** — Full history support
 
 ---
@@ -53,7 +52,7 @@ cd Antigravity_Gantt_charter
 | `index.html` | App structure and modals |
 | `index.css` | All styling (dark/light themes, layout, components) |
 | `app.js` | All application logic (rendering, state, events) |
-| `LICENSE.txt` | MIT License text |
+| `LICENSE` | MIT License text |
 
 ---
 
@@ -68,4 +67,4 @@ You are free to **use, copy, modify, merge, publish, distribute, sublicense, and
 - The software is provided **"as is"**, without warranty of any kind.
 - The author is **not liable** for any claim, damages, or other liability arising from its use.
 
-See [`LICENSE.txt`](LICENSE.txt) for the full license text.
+See [`LICENSE`](LICENSE) for the full license text.
